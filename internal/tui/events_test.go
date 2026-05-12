@@ -67,6 +67,25 @@ func TestModel_ApplyEvent_RunCompletedStoresErrorCode(t *testing.T) {
 	}
 }
 
+func TestModel_ApplyEvent_StepCompletedStoresErrorCode(t *testing.T) {
+	run := testRun()
+	m := NewModel("/tmp/sock", nil, run)
+	status := string(types.StepStatusFailed)
+	code := "test_failure"
+
+	m.applyEvent(ipc.Event{
+		Type:      ipc.EventStepCompleted,
+		RunID:     run.ID,
+		StepName:  ptr(types.StepTest),
+		Status:    &status,
+		ErrorCode: &code,
+	})
+
+	if m.steps[1].ErrorCode == nil || *m.steps[1].ErrorCode != code {
+		t.Fatalf("step error_code = %v, want %q", m.steps[1].ErrorCode, code)
+	}
+}
+
 func TestModel_HandleKey_Quit(t *testing.T) {
 	run := testRun()
 	m := NewModel("/tmp/sock", nil, run)

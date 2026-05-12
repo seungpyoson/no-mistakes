@@ -266,7 +266,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			if dbErr := e.db.FailStepWithCode(sr.ID, err.Error(), durationMS, code); dbErr != nil {
 				slog.Warn("failed to mark step as failed in db", "step", stepName, "error", dbErr)
 			}
-			e.emitStepEventWithFindingsDiffAndError(ipc.EventStepCompleted, run, repo, stepName, string(types.StepStatusFailed), "", "", err.Error(), &durationMS)
+			e.emitStepEventWithFindingsDiffErrorAndCode(ipc.EventStepCompleted, run, repo, stepName, string(types.StepStatusFailed), "", "", err.Error(), code, &durationMS)
 			return false, fmt.Errorf("step %s failed: %w", stepName, err)
 		}
 
@@ -347,7 +347,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			if dbErr := e.db.FailStepWithCode(sr.ID, err.Error(), durationMS, types.FailureModelFixLoop); dbErr != nil {
 				slog.Warn("failed to mark step as failed in db", "step", stepName, "error", dbErr)
 			}
-			e.emitStepEventWithFindingsDiffAndError(ipc.EventStepCompleted, run, repo, stepName, string(types.StepStatusFailed), "", "", err.Error(), &durationMS)
+			e.emitStepEventWithFindingsDiffErrorAndCode(ipc.EventStepCompleted, run, repo, stepName, string(types.StepStatusFailed), "", "", err.Error(), types.FailureModelFixLoop, &durationMS)
 			return false, fmt.Errorf("step %s failed: %w", stepName, err)
 		}
 
@@ -399,7 +399,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			if dbErr := e.db.FailStepWithCode(sr.ID, err.Error(), executionMS, code); dbErr != nil {
 				slog.Warn("failed to mark step as failed in db", "step", stepName, "error", dbErr)
 			}
-			e.emitStepEventWithFindingsDiffAndError(ipc.EventStepCompleted, run, repo, stepName, string(types.StepStatusFailed), "", "", err.Error(), &executionMS)
+			e.emitStepEventWithFindingsDiffErrorAndCode(ipc.EventStepCompleted, run, repo, stepName, string(types.StepStatusFailed), "", "", err.Error(), code, &executionMS)
 			return false, fmt.Errorf("step %s: waiting for approval: %w", stepName, err)
 		}
 
@@ -466,7 +466,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			if dbErr := e.db.FailStepWithCode(sr.ID, "aborted by user", executionMS, types.FailureUserAbort); dbErr != nil {
 				slog.Warn("failed to mark step as failed in db", "step", stepName, "error", dbErr)
 			}
-			e.emitStepEventWithFindingsDiffAndError(ipc.EventStepCompleted, run, repo, stepName, string(types.StepStatusFailed), "", "", "aborted by user", &executionMS)
+			e.emitStepEventWithFindingsDiffErrorAndCode(ipc.EventStepCompleted, run, repo, stepName, string(types.StepStatusFailed), "", "", "aborted by user", types.FailureUserAbort, &executionMS)
 			return false, fmt.Errorf("step %s: aborted by user", stepName)
 
 		case types.ActionFix:
@@ -610,6 +610,10 @@ func (e *Executor) emitStepEventWithFindingsAndDiff(eventType ipc.EventType, run
 }
 
 func (e *Executor) emitStepEventWithFindingsDiffAndError(eventType ipc.EventType, run *db.Run, repo *db.Repo, stepName types.StepName, status string, findings string, diff string, errMsg string, durationMS *int64) {
+	e.emitStepEventWithFindingsDiffErrorAndCode(eventType, run, repo, stepName, status, findings, diff, errMsg, "", durationMS)
+}
+
+func (e *Executor) emitStepEventWithFindingsDiffErrorAndCode(eventType ipc.EventType, run *db.Run, repo *db.Repo, stepName types.StepName, status string, findings string, diff string, errMsg string, errorCode types.FailureCode, durationMS *int64) {
 	event := ipc.Event{
 		Type:       eventType,
 		RunID:      run.ID,
@@ -620,6 +624,10 @@ func (e *Executor) emitStepEventWithFindingsDiffAndError(eventType ipc.EventType
 	}
 	if errMsg != "" {
 		event.Error = &errMsg
+	}
+	if errorCode != "" {
+		codeText := string(errorCode)
+		event.ErrorCode = &codeText
 	}
 	if findings != "" {
 		event.Findings = &findings
