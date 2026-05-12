@@ -189,6 +189,35 @@ func TestExecutor_StepError_FailsRun(t *testing.T) {
 	}
 }
 
+func TestExecutor_StepErrorRecordsTypedFailureCode(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+
+	exec := NewExecutor(database, p, nil, nil, []Step{
+		newFailStep(types.StepTest, fmt.Errorf("tests crashed")),
+	}, nil)
+
+	if err := exec.Execute(context.Background(), run, repo, workDir); err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	updated, err := database.GetRun(run.ID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if updated.ErrorCode == nil || *updated.ErrorCode != string(types.FailureTestFailure) {
+		t.Fatalf("run error_code = %v, want %q", updated.ErrorCode, types.FailureTestFailure)
+	}
+
+	dbSteps, err := database.GetStepsByRun(run.ID)
+	if err != nil {
+		t.Fatalf("get steps: %v", err)
+	}
+	if dbSteps[0].ErrorCode == nil || *dbSteps[0].ErrorCode != string(types.FailureTestFailure) {
+		t.Fatalf("step error_code = %v, want %q", dbSteps[0].ErrorCode, types.FailureTestFailure)
+	}
+}
+
 func TestExecutor_FailedStepEmitsTelemetry(t *testing.T) {
 	database, p, run, repo := setupTest(t)
 	workDir := t.TempDir()

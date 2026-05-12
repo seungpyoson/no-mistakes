@@ -17,6 +17,7 @@ type Run struct {
 	Status          types.RunStatus
 	PRURL           *string
 	Error           *string
+	ErrorCode       *string
 	Intent          *string
 	IntentSource    *string
 	IntentSessionID *string
@@ -25,14 +26,14 @@ type Run struct {
 	UpdatedAt       int64
 }
 
-const runColumns = `id, repo_id, branch, head_sha, base_sha, status, pr_url, error, intent, intent_source, intent_session_id, intent_score, created_at, updated_at`
+const runColumns = `id, repo_id, branch, head_sha, base_sha, status, pr_url, error, error_code, intent, intent_source, intent_session_id, intent_score, created_at, updated_at`
 
 func scanRun(row interface {
 	Scan(...any) error
 }, r *Run) error {
 	return row.Scan(
 		&r.ID, &r.RepoID, &r.Branch, &r.HeadSHA, &r.BaseSHA, &r.Status,
-		&r.PRURL, &r.Error,
+		&r.PRURL, &r.Error, &r.ErrorCode,
 		&r.Intent, &r.IntentSource, &r.IntentSessionID, &r.IntentScore,
 		&r.CreatedAt, &r.UpdatedAt,
 	)
@@ -152,7 +153,17 @@ func (d *DB) UpdateRunError(id, errMsg string) error {
 
 // UpdateRunErrorStatus sets the error message and terminal status on a run.
 func (d *DB) UpdateRunErrorStatus(id, errMsg string, status types.RunStatus) error {
-	_, err := d.sql.Exec(`UPDATE runs SET error = ?, status = ?, updated_at = ? WHERE id = ?`, errMsg, status, now(), id)
+	return d.UpdateRunErrorStatusCode(id, errMsg, status, "")
+}
+
+// UpdateRunErrorStatusCode sets the error message, terminal status, and typed
+// failure code on a run.
+func (d *DB) UpdateRunErrorStatusCode(id, errMsg string, status types.RunStatus, code types.FailureCode) error {
+	var codeValue any
+	if code != "" {
+		codeValue = string(code)
+	}
+	_, err := d.sql.Exec(`UPDATE runs SET error = ?, error_code = ?, status = ?, updated_at = ? WHERE id = ?`, errMsg, codeValue, status, now(), id)
 	if err != nil {
 		return fmt.Errorf("update run error: %w", err)
 	}

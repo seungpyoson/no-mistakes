@@ -19,6 +19,7 @@ type StepResult struct {
 	LogPath      *string
 	FindingsJSON *string
 	Error        *string
+	ErrorCode    *string
 	StartedAt    *int64
 	CompletedAt  *int64
 }
@@ -46,8 +47,8 @@ func (d *DB) InsertStepResult(runID string, stepName types.StepName) (*StepResul
 func (d *DB) GetStepResult(id string) (*StepResult, error) {
 	s := &StepResult{}
 	err := d.sql.QueryRow(
-		`SELECT id, run_id, step_name, step_order, status, exit_code, duration_ms, log_path, findings_json, error, started_at, completed_at FROM step_results WHERE id = ?`, id,
-	).Scan(&s.ID, &s.RunID, &s.StepName, &s.StepOrder, &s.Status, &s.ExitCode, &s.DurationMS, &s.LogPath, &s.FindingsJSON, &s.Error, &s.StartedAt, &s.CompletedAt)
+		`SELECT id, run_id, step_name, step_order, status, exit_code, duration_ms, log_path, findings_json, error, error_code, started_at, completed_at FROM step_results WHERE id = ?`, id,
+	).Scan(&s.ID, &s.RunID, &s.StepName, &s.StepOrder, &s.Status, &s.ExitCode, &s.DurationMS, &s.LogPath, &s.FindingsJSON, &s.Error, &s.ErrorCode, &s.StartedAt, &s.CompletedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -60,7 +61,7 @@ func (d *DB) GetStepResult(id string) (*StepResult, error) {
 // GetStepsByRun returns all step results for a run, in execution order.
 func (d *DB) GetStepsByRun(runID string) ([]*StepResult, error) {
 	rows, err := d.sql.Query(
-		`SELECT id, run_id, step_name, step_order, status, exit_code, duration_ms, log_path, findings_json, error, started_at, completed_at FROM step_results WHERE run_id = ? ORDER BY step_order`, runID,
+		`SELECT id, run_id, step_name, step_order, status, exit_code, duration_ms, log_path, findings_json, error, error_code, started_at, completed_at FROM step_results WHERE run_id = ? ORDER BY step_order`, runID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("get steps by run: %w", err)
@@ -69,7 +70,7 @@ func (d *DB) GetStepsByRun(runID string) ([]*StepResult, error) {
 	var steps []*StepResult
 	for rows.Next() {
 		s := &StepResult{}
-		if err := rows.Scan(&s.ID, &s.RunID, &s.StepName, &s.StepOrder, &s.Status, &s.ExitCode, &s.DurationMS, &s.LogPath, &s.FindingsJSON, &s.Error, &s.StartedAt, &s.CompletedAt); err != nil {
+		if err := rows.Scan(&s.ID, &s.RunID, &s.StepName, &s.StepOrder, &s.Status, &s.ExitCode, &s.DurationMS, &s.LogPath, &s.FindingsJSON, &s.Error, &s.ErrorCode, &s.StartedAt, &s.CompletedAt); err != nil {
 			return nil, fmt.Errorf("scan step result: %w", err)
 		}
 		steps = append(steps, s)
@@ -123,9 +124,18 @@ func (d *DB) CompleteStepWithStatus(id string, status types.StepStatus, exitCode
 
 // FailStep marks a step as failed with an error message and duration.
 func (d *DB) FailStep(id string, errMsg string, durationMS int64) error {
+	return d.FailStepWithCode(id, errMsg, durationMS, "")
+}
+
+// FailStepWithCode marks a step as failed with a typed failure code.
+func (d *DB) FailStepWithCode(id string, errMsg string, durationMS int64, code types.FailureCode) error {
+	var codeValue any
+	if code != "" {
+		codeValue = string(code)
+	}
 	_, err := d.sql.Exec(
-		`UPDATE step_results SET status = ?, error = ?, duration_ms = ?, completed_at = ? WHERE id = ?`,
-		types.StepStatusFailed, errMsg, durationMS, now(), id,
+		`UPDATE step_results SET status = ?, error = ?, error_code = ?, duration_ms = ?, completed_at = ? WHERE id = ?`,
+		types.StepStatusFailed, errMsg, codeValue, durationMS, now(), id,
 	)
 	if err != nil {
 		return fmt.Errorf("fail step: %w", err)

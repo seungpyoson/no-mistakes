@@ -250,6 +250,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 	autoFixAttempts := 0
 	roundNum := 0
 	nextTrigger := "initial"
+	lastFixSource := ""
 	skipRemaining := false
 	stepSkipped := false
 	var currentRoundID string // id of the most recently inserted round
@@ -261,7 +262,8 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		roundDuration := time.Since(phaseStart).Milliseconds()
 		if err != nil {
 			durationMS := executionMS + roundDuration
-			if dbErr := e.db.FailStep(sr.ID, err.Error(), durationMS); dbErr != nil {
+			code := failureCodeForStepError(stepName, err, ctx)
+			if dbErr := e.db.FailStepWithCode(sr.ID, err.Error(), durationMS, code); dbErr != nil {
 				slog.Warn("failed to mark step as failed in db", "step", stepName, "error", dbErr)
 			}
 			e.emitStepEventWithFindingsDiffAndError(ipc.EventStepCompleted, run, repo, stepName, string(types.StepStatusFailed), "", "", err.Error(), &durationMS)
@@ -309,7 +311,10 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		// Only auto-fix findings whose action is "auto-fix".
 		// This runs before the NeedsApproval check so that all severity
 		// levels (including "info") get a chance at automatic fixing.
-		if outcome.AutoFixable && autoFixLimit > 0 && autoFixAttempts < autoFixLimit {
+		// After a user-requested fix, remaining ask-user findings must be
+		// surfaced for review before unrelated auto-fix findings can continue.
+		autoFixBlockedByUserFix := lastFixSource == db.RoundSelectionSourceUser && hasAskUserFindingsJSON(outcome.Findings)
+		if !autoFixBlockedByUserFix && outcome.AutoFixable && autoFixLimit > 0 && autoFixAttempts < autoFixLimit {
 			fixableFindings := autoFixableFindingsJSON(outcome.Findings)
 			if fixableFindings != "" {
 				autoFixAttempts++
@@ -331,8 +336,19 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 				sctx.Fixing = true
 				sctx.PreviousFindings = fixableFindings
 				nextTrigger = "auto_fix"
+				lastFixSource = db.RoundSelectionSourceAutoFix
 				continue
 			}
+		}
+		if outcome.AutoFixable && autoFixLimit > 0 && autoFixAttempts >= autoFixLimit &&
+			autoFixableFindingsJSON(outcome.Findings) != "" && !hasAskUserFindingsJSON(outcome.Findings) {
+			durationMS := executionMS + time.Since(phaseStart).Milliseconds()
+			err := fmt.Errorf("%s: auto-fix limit reached with unresolved findings", types.FailureModelFixLoop)
+			if dbErr := e.db.FailStepWithCode(sr.ID, err.Error(), durationMS, types.FailureModelFixLoop); dbErr != nil {
+				slog.Warn("failed to mark step as failed in db", "step", stepName, "error", dbErr)
+			}
+			e.emitStepEventWithFindingsDiffAndError(ipc.EventStepCompleted, run, repo, stepName, string(types.StepStatusFailed), "", "", err.Error(), &durationMS)
+			return false, fmt.Errorf("step %s failed: %w", stepName, err)
 		}
 
 		if !outcome.NeedsApproval && !hasAskUserFindingsJSON(outcome.Findings) {
@@ -376,7 +392,8 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 
 		response, err := e.waitForApproval(ctx, stepName)
 		if err != nil {
-			if dbErr := e.db.FailStep(sr.ID, err.Error(), executionMS); dbErr != nil {
+			code := failureCodeForStepError(stepName, err, ctx)
+			if dbErr := e.db.FailStepWithCode(sr.ID, err.Error(), executionMS, code); dbErr != nil {
 				slog.Warn("failed to mark step as failed in db", "step", stepName, "error", dbErr)
 			}
 			e.emitStepEventWithFindingsDiffAndError(ipc.EventStepCompleted, run, repo, stepName, string(types.StepStatusFailed), "", "", err.Error(), &executionMS)
@@ -404,6 +421,21 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			goto done
 
 		case types.ActionSkip:
+			if currentRoundID != "" {
+				if idsJSON := marshalFindingIDs(response.findingIDs); idsJSON != "" {
+					if dbErr := e.db.SetStepRoundSelection(currentRoundID, &idsJSON, db.RoundSelectionSourceUser); dbErr != nil {
+						slog.Warn("failed to record selected finding ids", "step", stepName, "round", roundNum, "error", dbErr)
+					}
+				}
+				selectedFindings := filterFindingsJSON(outcome.Findings, response.findingIDs)
+				mergedFindings := mergeUserOverridesJSON(selectedFindings, response.instructions, response.addedFindings)
+				if mergedFindings != "" && mergedFindings != selectedFindings {
+					merged := mergedFindings
+					if dbErr := e.db.SetStepRoundUserFindings(currentRoundID, &merged); dbErr != nil {
+						slog.Warn("failed to record user findings", "step", stepName, "round", roundNum, "error", dbErr)
+					}
+				}
+			}
 			// Skip - mark step skipped and return (not an error)
 			if err := e.db.CompleteStepWithStatus(sr.ID, types.StepStatusSkipped, finalExitCode, executionMS, logPath); err != nil {
 				return false, fmt.Errorf("complete step %s (skip): %w", stepName, err)
@@ -412,7 +444,23 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			return false, nil
 
 		case types.ActionAbort:
-			if dbErr := e.db.FailStep(sr.ID, "aborted by user", executionMS); dbErr != nil {
+			if currentRoundID != "" {
+				selectedFindings := filterFindingsJSON(outcome.Findings, response.findingIDs)
+				mergedFindings := mergeUserOverridesJSON(selectedFindings, response.instructions, response.addedFindings)
+				allSelectedIDs := combineSelectedFindingIDs(response.findingIDs, mergedFindings)
+				if idsJSON := marshalFindingIDs(allSelectedIDs); idsJSON != "" {
+					if dbErr := e.db.SetStepRoundSelection(currentRoundID, &idsJSON, db.RoundSelectionSourceUser); dbErr != nil {
+						slog.Warn("failed to record selected finding ids", "step", stepName, "round", roundNum, "error", dbErr)
+					}
+				}
+				if mergedFindings != "" && mergedFindings != selectedFindings {
+					merged := mergedFindings
+					if dbErr := e.db.SetStepRoundUserFindings(currentRoundID, &merged); dbErr != nil {
+						slog.Warn("failed to record user findings", "step", stepName, "round", roundNum, "error", dbErr)
+					}
+				}
+			}
+			if dbErr := e.db.FailStepWithCode(sr.ID, "aborted by user", executionMS, types.FailureUserAbort); dbErr != nil {
 				slog.Warn("failed to mark step as failed in db", "step", stepName, "error", dbErr)
 			}
 			e.emitStepEventWithFindingsDiffAndError(ipc.EventStepCompleted, run, repo, stepName, string(types.StepStatusFailed), "", "", "aborted by user", &executionMS)
@@ -430,6 +478,7 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			mergedFindings := mergeUserOverridesJSON(selectedFindings, response.instructions, response.addedFindings)
 			sctx.PreviousFindings = mergedFindings
 			nextTrigger = "auto_fix"
+			lastFixSource = db.RoundSelectionSourceUser
 			if currentRoundID != "" {
 				allSelectedIDs := combineSelectedFindingIDs(response.findingIDs, mergedFindings)
 				if idsJSON := marshalFindingIDs(allSelectedIDs); idsJSON != "" {
@@ -512,11 +561,18 @@ func (e *Executor) failRun(run *db.Run, repo *db.Repo, err error, ctxs ...contex
 	if errMsg == types.RunCancelReasonAbortedByUser || errMsg == types.RunCancelReasonSuperseded {
 		runStatus = types.RunCancelled
 	}
-	if dbErr := e.db.UpdateRunErrorStatus(run.ID, errMsg, runStatus); dbErr != nil {
+	code := failureCodeForRunError(err, ctxs...)
+	if dbErr := e.db.UpdateRunErrorStatusCode(run.ID, errMsg, runStatus, code); dbErr != nil {
 		slog.Error("failed to update run error status", "run", run.ID, "error", dbErr)
 	}
 	run.Status = runStatus
 	run.Error = &errMsg
+	if code != "" {
+		codeText := string(code)
+		run.ErrorCode = &codeText
+	} else {
+		run.ErrorCode = nil
+	}
 	e.emitRunEvent(ipc.EventRunCompleted, run, repo)
 	return err
 }

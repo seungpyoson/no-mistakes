@@ -168,6 +168,74 @@ ci_timeout: "8h"
 
 If CI is genuinely hanging on the provider side, the step times out and pauses with findings for the unresolved state. You can approve (accept the risk), fix (run another auto-fix cycle), skip, or abort from the TUI.
 
+## Review/fix loop runbook
+
+Use this when review or fix appears stuck, repeats findings, or ends before later steps (`test`, `document`, `lint`, `push`, `pr`, `ci`) run.
+
+### Identify the run
+
+```sh
+no-mistakes runs --limit 5
+```
+
+Then inspect durable state:
+
+```sh
+sqlite3 ~/.no-mistakes/state.sqlite \
+  "select step_name,status,error_code,exit_code,duration_ms,completed_at,error from step_results where run_id='<run_id>' order by step_order;"
+
+sqlite3 ~/.no-mistakes/state.sqlite \
+  "select sr.step_name,r.round,r.trigger_type,r.selection_source,r.selected_finding_ids,r.fix_summary,r.duration_ms from step_rounds r join step_results sr on sr.id=r.step_result_id where sr.run_id='<run_id>' order by sr.step_order,r.round;"
+```
+
+`error_code` separates no-mistakes/tool failures from reviewed-code failures:
+
+- `provider_unavailable`: provider/model config failed readiness, such as missing env key or unmatched model pattern.
+- `model_timeout`: model/tool call timed out.
+- `model_fix_loop`: selected findings made no progress and reached a terminal loop failure.
+- `tool_crash`: agent/tool process crashed or exited unexpectedly.
+- `user_abort`: user aborted or cancelled the run.
+- `test_failure`: test step failed.
+- `ci_failure`: CI step failed.
+
+### Read logs
+
+```sh
+tail -160 ~/.no-mistakes/logs/<run_id>/review.log
+tail -160 ~/.no-mistakes/logs/daemon.log
+```
+
+If `cancel_run` appears before `signal: killed`, the killed agent process is a cancellation artifact. Debug the earlier loop/provider state, not the final signal.
+
+### Preserve fix commits
+
+Do not delete worktrees or gate refs until useful commits are copied or pushed. Inspect the gate branch first:
+
+```sh
+git --git-dir ~/.no-mistakes/repos/<repo_id>.git log --oneline -12 refs/heads/<branch>
+git --git-dir ~/.no-mistakes/repos/<repo_id>.git show --stat <commit>
+```
+
+To recover, cherry-pick from the preserved gate branch into a normal worktree, then push through the gate again. Avoid `git reset --hard` or deleting `~/.no-mistakes/worktrees/...` while investigating.
+
+### Approval action semantics
+
+- `fix`: selected findings are sent to the agent. Next review must either resolve them or pause again before unrelated auto-fix continues.
+- `skip`: current step is marked skipped, selected findings and any rationale are recorded on the round, and later pipeline steps continue.
+- `approve`: current findings are accepted as-is and the pipeline continues.
+- `abort`: current step fails with `user_abort`, and the run stops.
+
+For false positives, select the finding, choose `skip`, and include a short rationale. That rationale is stored in `step_rounds.user_findings_json`.
+
+### Provider readiness
+
+Agents that implement preflight checks validate provider readiness before the review/fix loop starts. Missing env keys and unmatched model patterns should fail early with `provider_unavailable` instead of surfacing later as noisy agent stderr. `doctor` confirms local binaries and the daemon environment; the daemon log shows provider preflight failures:
+
+```sh
+no-mistakes doctor
+tail -120 ~/.no-mistakes/logs/daemon.log
+```
+
 ## Worktree won't clean up
 
 Symptom: `~/.no-mistakes/worktrees/<repoID>/<runID>/` sticks around after a run ends.

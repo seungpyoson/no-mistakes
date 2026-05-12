@@ -311,6 +311,12 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 			trackStartFailure("create_agent")
 			return "", fmt.Errorf("create agent: %w", agErr)
 		}
+		if err := agent.Preflight(ctx, ag); err != nil {
+			msg := fmt.Sprintf("agent preflight: %s", err)
+			m.db.UpdateRunErrorStatusCode(run.ID, msg, types.RunFailed, types.FailureProviderUnavailable)
+			trackStartFailure("agent_preflight")
+			return "", fmt.Errorf("agent preflight: %w", err)
+		}
 	}
 
 	execSteps := m.steps()

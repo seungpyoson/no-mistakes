@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS runs (
     status     TEXT NOT NULL DEFAULT 'pending',
     pr_url     TEXT,
     error      TEXT,
+    error_code TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -33,6 +34,7 @@ CREATE TABLE IF NOT EXISTS step_results (
     log_path      TEXT,
     findings_json TEXT,
     error         TEXT,
+    error_code    TEXT,
     started_at    INTEGER,
     completed_at  INTEGER
 );
@@ -72,4 +74,6 @@ var migrationStatements = []string{
 	`ALTER TABLE runs ADD COLUMN intent_source TEXT`,
 	`ALTER TABLE runs ADD COLUMN intent_session_id TEXT`,
 	`ALTER TABLE runs ADD COLUMN intent_score REAL`,
+	`ALTER TABLE runs ADD COLUMN error_code TEXT`,
+	`ALTER TABLE step_results ADD COLUMN error_code TEXT`,
 }

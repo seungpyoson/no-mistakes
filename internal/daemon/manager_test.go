@@ -123,6 +123,63 @@ func TestPushReceivedSkipStepsConfiguresExecutor(t *testing.T) {
 	}
 }
 
+func TestPushReceivedPreflightsAgentBeforePipelineSteps(t *testing.T) {
+	review := &mockPassStep{name: types.StepReview}
+	p, d := startTestDaemonWithSteps(t, func() []pipeline.Step {
+		return []pipeline.Step{review}
+	})
+
+	failingPi := writeReadinessFailingPi(t, t.TempDir())
+	configYAML := "agent: pi\nagent_path_override:\n  pi: " + failingPi + "\n"
+	if err := os.WriteFile(p.ConfigFile(), []byte(configYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, headSHA := setupTestGitRepo(t, p, d, "preflight-run-repo")
+
+	client, err := ipc.Dial(p.Socket())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	var result ipc.PushReceivedResult
+	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
+		Gate: p.RepoDir("preflight-run-repo"),
+		Ref:  "refs/heads/main",
+		Old:  "0000000000000000000000000000000000000000",
+		New:  headSHA,
+	}, &result)
+	if err == nil {
+		t.Fatal("expected push_received to fail preflight")
+	}
+
+	runs, err := d.GetRunsByRepo("preflight-run-repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("runs = %d, want 1", len(runs))
+	}
+	run := runs[0]
+	if run.Status != types.RunFailed {
+		t.Fatalf("run status = %q, want %q", run.Status, types.RunFailed)
+	}
+	if run.ErrorCode == nil || *run.ErrorCode != string(types.FailureProviderUnavailable) {
+		t.Fatalf("run error_code = %v, want %q", run.ErrorCode, types.FailureProviderUnavailable)
+	}
+	if got := review.execCnt.Load(); got != 0 {
+		t.Fatalf("review executed %d times, want 0", got)
+	}
+	steps, err := d.GetStepsByRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(steps) != 0 {
+		t.Fatalf("created %d step records before preflight, want 0", len(steps))
+	}
+}
+
 func TestPushReceivedReturnsBeforeIntentSummarization(t *testing.T) {
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
