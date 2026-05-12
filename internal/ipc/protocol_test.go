@@ -320,11 +320,12 @@ func TestEventTypes(t *testing.T) {
 		{
 			name: "run_completed_with_error",
 			event: Event{
-				Type:   EventRunCompleted,
-				RunID:  "run001",
-				RepoID: "repo001",
-				Status: ptrStr(string(types.RunFailed)),
-				Error:  ptrStr("step review failed"),
+				Type:      EventRunCompleted,
+				RunID:     "run001",
+				RepoID:    "repo001",
+				Status:    ptrStr(string(types.RunFailed)),
+				Error:     ptrStr("step review failed"),
+				ErrorCode: ptrStr(string(types.FailureModelFixLoop)),
 			},
 		},
 		{
@@ -358,6 +359,11 @@ func TestEventTypes(t *testing.T) {
 			if tt.event.Error != nil {
 				if got.Error == nil || *got.Error != *tt.event.Error {
 					t.Errorf("error = %v, want %q", got.Error, *tt.event.Error)
+				}
+			}
+			if tt.event.ErrorCode != nil {
+				if got.ErrorCode == nil || *got.ErrorCode != *tt.event.ErrorCode {
+					t.Errorf("error_code = %v, want %q", got.ErrorCode, *tt.event.ErrorCode)
 				}
 			}
 		})

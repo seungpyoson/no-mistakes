@@ -177,6 +177,17 @@ func TestRenderPipelineView_Error(t *testing.T) {
 	}
 }
 
+func TestRenderPipelineView_ErrorCode(t *testing.T) {
+	run := testRun()
+	run.Error = ptr("step review failed")
+	run.ErrorCode = ptr("model_fix_loop")
+
+	out := stripANSI(renderPipelineView(run, run.Steps, 80, 0, 40))
+	if !strings.Contains(out, "Error Code: model_fix_loop") {
+		t.Fatalf("expected error code in output, got:\n%s", out)
+	}
+}
+
 func TestRenderPipelineView_StepError(t *testing.T) {
 	run := testRun()
 	run.Steps[1].Status = types.StepStatusFailed

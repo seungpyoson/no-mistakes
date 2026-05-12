@@ -47,6 +47,26 @@ func TestModel_ApplyEvent_LogChunk_Truncation(t *testing.T) {
 	}
 }
 
+func TestModel_ApplyEvent_RunCompletedStoresErrorCode(t *testing.T) {
+	run := testRun()
+	m := NewModel("/tmp/sock", nil, run)
+	status := string(types.RunFailed)
+	errMsg := "step review failed"
+	code := "model_fix_loop"
+
+	m.applyEvent(ipc.Event{
+		Type:      ipc.EventRunCompleted,
+		RunID:     run.ID,
+		Status:    &status,
+		Error:     &errMsg,
+		ErrorCode: &code,
+	})
+
+	if m.run.ErrorCode == nil || *m.run.ErrorCode != code {
+		t.Fatalf("run error_code = %v, want %q", m.run.ErrorCode, code)
+	}
+}
+
 func TestModel_HandleKey_Quit(t *testing.T) {
 	run := testRun()
 	m := NewModel("/tmp/sock", nil, run)

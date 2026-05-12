@@ -94,7 +94,7 @@ no-mistakes runs [--limit <n>]
 |---|---|---|---|
 | `--limit` | `int` | `10` | Maximum number of runs to display |
 
-Shows runs newest-first with branch, status (styled), short SHA, timestamp, and PR URL if set.
+Shows runs newest-first with branch, status (styled), short SHA, timestamp, `error_code` when set, and PR URL if set.
 
 ## no-mistakes stats
 

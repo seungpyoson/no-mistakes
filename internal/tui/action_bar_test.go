@@ -155,6 +155,20 @@ func TestOutcomeBanner_FailureShowsX(t *testing.T) {
 	}
 }
 
+func TestOutcomeBanner_FailureShowsErrorCode(t *testing.T) {
+	run := testRun()
+	run.Status = types.RunFailed
+	run.ErrorCode = ptr("provider_unavailable")
+	steps := []ipc.StepResultInfo{
+		{StepName: types.StepReview, Status: types.StepStatusFailed},
+	}
+
+	banner := stripANSI(renderOutcomeBanner(run, steps))
+	if !strings.Contains(banner, "provider_unavailable") {
+		t.Fatalf("expected error code in banner, got: %s", banner)
+	}
+}
+
 func TestOutcomeBanner_EmptyWhenRunning(t *testing.T) {
 	run := testRun()
 	run.Status = types.RunRunning
