@@ -225,6 +225,7 @@ type Event struct {
 	StepName         *types.StepName `json:"step_name,omitempty"`
 	Status           *string         `json:"status,omitempty"`
 	Error            *string         `json:"error,omitempty"`
+	ErrorCode        *string         `json:"error_code,omitempty"`
 	Stream           *string         `json:"stream,omitempty"`
 	Content          *string         `json:"content,omitempty"`
 	Branch           *string         `json:"branch,omitempty"`

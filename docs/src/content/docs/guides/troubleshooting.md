@@ -178,6 +178,8 @@ Use this when review or fix appears stuck, repeats findings, or ends before late
 no-mistakes runs --limit 5
 ```
 
+The TUI failure banner and `no-mistakes runs` output show `error_code` when one is present.
+
 Then inspect durable state:
 
 ```sh

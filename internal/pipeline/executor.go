@@ -582,13 +582,14 @@ func (e *Executor) failRun(run *db.Run, repo *db.Repo, err error, ctxs ...contex
 func (e *Executor) emitRunEvent(eventType ipc.EventType, run *db.Run, repo *db.Repo) {
 	status := string(run.Status)
 	event := ipc.Event{
-		Type:   eventType,
-		RunID:  run.ID,
-		RepoID: repo.ID,
-		Status: &status,
-		Branch: &run.Branch,
-		Error:  run.Error,
-		PRURL:  run.PRURL,
+		Type:      eventType,
+		RunID:     run.ID,
+		RepoID:    repo.ID,
+		Status:    &status,
+		Branch:    &run.Branch,
+		Error:     run.Error,
+		ErrorCode: run.ErrorCode,
+		PRURL:     run.PRURL,
 	}
 	e.onEvent(event)
 }

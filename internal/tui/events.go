@@ -27,6 +27,9 @@ func (m *Model) applyEvent(event ipc.Event) {
 		if event.Error != nil {
 			m.run.Error = event.Error
 		}
+		if event.ErrorCode != nil {
+			m.run.ErrorCode = event.ErrorCode
+		}
 		if event.PRURL != nil {
 			m.run.PRURL = event.PRURL
 		}

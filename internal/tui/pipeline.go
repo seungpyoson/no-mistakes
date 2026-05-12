@@ -173,6 +173,14 @@ func renderPipelineView(run *ipc.RunInfo, steps []ipc.StepResultInfo, width int,
 				}
 				line += " " + dimStyle.Render(errText)
 			}
+			if step.ErrorCode != nil && *step.ErrorCode != "" {
+				codeText := "- error_code=" + *step.ErrorCode
+				remaining := contentWidth - lipgloss.Width(line) - 1
+				if remaining > 0 && lipgloss.Width(codeText) > remaining {
+					codeText, _ = cutText(codeText, remaining)
+				}
+				line += " " + dimStyle.Render(codeText)
+			}
 		}
 		if step.ReportedFindings > 0 && (step.FixedFindings > 0 || step.Status == types.StepStatusFixing) {
 			fixedLabel := dimStyle.Render(fmt.Sprintf("%d/%d fixed", step.FixedFindings, step.ReportedFindings))
@@ -194,6 +202,12 @@ func renderPipelineView(run *ipc.RunInfo, steps []ipc.StepResultInfo, width int,
 		errText := "Error: " + *run.Error
 		errText, _ = cutText(errText, contentWidth)
 		b.WriteString("\n" + errStyle.Render(errText) + "\n")
+	}
+	if run.ErrorCode != nil && *run.ErrorCode != "" {
+		errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(ansiRed))
+		codeText := "Error Code: " + *run.ErrorCode
+		codeText, _ = cutText(codeText, contentWidth)
+		b.WriteString(errStyle.Render(codeText) + "\n")
 	}
 	return renderBox("Pipeline", b.String(), boxWidth)
 }
@@ -308,15 +322,23 @@ func renderOutcomeBanner(run *ipc.RunInfo, steps []ipc.StepResultInfo) string {
 		}
 		style := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(ansiRed))
 		if failedLabel != "" {
-			return style.Render("✗ "+failedLabel+" failed") + elapsed
+			return style.Render("✗ "+failedLabel+" failed") + errorCodeSuffix(run) + elapsed
 		}
-		return style.Render("✗ Pipeline failed") + elapsed
+		return style.Render("✗ Pipeline failed") + errorCodeSuffix(run) + elapsed
 	case types.RunCancelled:
 		style := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(ansiRed))
-		return style.Render("✗ Pipeline cancelled") + elapsed
+		return style.Render("✗ Pipeline cancelled") + errorCodeSuffix(run) + elapsed
 	default:
 		return ""
 	}
+}
+
+func errorCodeSuffix(run *ipc.RunInfo) string {
+	if run == nil || run.ErrorCode == nil || *run.ErrorCode == "" {
+		return ""
+	}
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(ansiBrightBlack))
+	return "  " + dimStyle.Render("error_code="+*run.ErrorCode)
 }
 
 // helpEntry is a key-description pair for the help overlay.
