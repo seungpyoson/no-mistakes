@@ -206,6 +206,28 @@ func waitForStepStatus(t *testing.T, database *db.DB, runID string, stepName typ
 	t.Fatalf("step %s did not reach status %q within timeout", stepName, expected)
 }
 
+func waitForStepStatusOrDone(t *testing.T, database *db.DB, runID string, stepName types.StepName, expected types.StepStatus, done <-chan error) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-done:
+			t.Fatalf("executor finished before step %s reached status %q: %v", stepName, expected, err)
+		default:
+		}
+		steps, err := database.GetStepsByRun(runID)
+		if err == nil {
+			for _, s := range steps {
+				if s.StepName == stepName && s.Status == expected {
+					return
+				}
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("step %s did not reach status %q within timeout", stepName, expected)
+}
+
 func dirExists(path string) bool {
 	info, err := os.Stat(path)
 	if err != nil {

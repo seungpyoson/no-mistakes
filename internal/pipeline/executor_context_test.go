@@ -101,6 +101,9 @@ func TestExecutor_ContextCancelCause(t *testing.T) {
 		}
 		t.Errorf("expected run error to contain 'superseded by new push', got %q", got)
 	}
+	if updated.ErrorCode != nil {
+		t.Errorf("expected superseded run error_code to be nil, got %q", *updated.ErrorCode)
+	}
 }
 
 func TestExecutor_ContextCancelCauseBetweenSteps(t *testing.T) {
@@ -154,5 +157,8 @@ func TestExecutor_ContextCancelCauseBetweenSteps(t *testing.T) {
 			got = *updated.Error
 		}
 		t.Errorf("expected run error to contain 'superseded by new push', got %q", got)
+	}
+	if updated.ErrorCode != nil {
+		t.Errorf("expected superseded run error_code to be nil, got %q", *updated.ErrorCode)
 	}
 }

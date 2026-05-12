@@ -9,6 +9,27 @@ import (
 	"testing"
 )
 
+func TestMain(m *testing.M) {
+	home, err := os.MkdirTemp("", "no-mistakes-git-test-home-")
+	if err != nil {
+		panic(err)
+	}
+	xdgConfig, err := os.MkdirTemp("", "no-mistakes-git-test-xdg-")
+	if err != nil {
+		panic(err)
+	}
+
+	_ = os.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	_ = os.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	_ = os.Setenv("HOME", home)
+	_ = os.Setenv("XDG_CONFIG_HOME", xdgConfig)
+
+	code := m.Run()
+	_ = os.RemoveAll(home)
+	_ = os.RemoveAll(xdgConfig)
+	os.Exit(code)
+}
+
 // helper: create a non-bare git repo with an initial commit
 func initTestRepo(t *testing.T) string {
 	t.Helper()

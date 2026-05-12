@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 )
 
 // piAgent spawns the pi CLI for each invocation. Pi reads its prompt from
@@ -20,6 +21,25 @@ type piAgent struct {
 }
 
 func (a *piAgent) Name() string { return "pi" }
+
+func (a *piAgent) Preflight(ctx context.Context) error {
+	checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(checkCtx, a.bin, "--help")
+	out, err := cmd.CombinedOutput()
+	output := strings.TrimSpace(string(out))
+	if readinessErr := DetectReadinessFailure(output); readinessErr != nil {
+		return readinessErr
+	}
+	if err != nil {
+		if output != "" {
+			return fmt.Errorf("pi preflight: %w: %s", err, output)
+		}
+		return fmt.Errorf("pi preflight: %w", err)
+	}
+	return nil
+}
 
 func (a *piAgent) Run(ctx context.Context, opts RunOpts) (*Result, error) {
 	return runWithRetry(ctx, "pi", opts, claudeMaxRetries, classifyTransient, nil, func() (*Result, error) {

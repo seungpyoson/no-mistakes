@@ -22,6 +22,19 @@ const (
 	RunCancelReasonSuperseded    = "cancelled: superseded by new push"
 )
 
+// FailureCode classifies why no-mistakes, rather than reviewed code, failed.
+type FailureCode string
+
+const (
+	FailureModelTimeout        FailureCode = "model_timeout"
+	FailureModelFixLoop        FailureCode = "model_fix_loop"
+	FailureToolCrash           FailureCode = "tool_crash"
+	FailureUserAbort           FailureCode = "user_abort"
+	FailureTestFailure         FailureCode = "test_failure"
+	FailureCIFailure           FailureCode = "ci_failure"
+	FailureProviderUnavailable FailureCode = "provider_unavailable"
+)
+
 // StepName identifies a pipeline step.
 type StepName string
 

@@ -478,6 +478,7 @@ func runToInfo(r *db.Run, steps []*db.StepResult) *ipc.RunInfo {
 		Status:    r.Status,
 		PRURL:     r.PRURL,
 		Error:     r.Error,
+		ErrorCode: r.ErrorCode,
 		CreatedAt: r.CreatedAt,
 		UpdatedAt: r.UpdatedAt,
 	}
@@ -501,6 +502,7 @@ func stepToInfo(s *db.StepResult) ipc.StepResultInfo {
 		DurationMS:   s.DurationMS,
 		FindingsJSON: s.FindingsJSON,
 		Error:        s.Error,
+		ErrorCode:    s.ErrorCode,
 		StartedAt:    s.StartedAt,
 		CompletedAt:  s.CompletedAt,
 	}

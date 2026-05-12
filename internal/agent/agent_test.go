@@ -70,6 +70,19 @@ func TestNewWithOptions_ACPRegistryOverride(t *testing.T) {
 	}
 }
 
+func TestDetectReadinessFailure_ClassifiesProviderConfigWarnings(t *testing.T) {
+	output := `[sync-llm-config] env_key POOLSIDE_API_KEY is configured but the environment variable is not set
+[sync-llm-config] No models match pattern openrouter/~google/gemini-pro-latest`
+
+	err := DetectReadinessFailure(output)
+	if err == nil {
+		t.Fatal("expected readiness error")
+	}
+	if !strings.Contains(err.Error(), "provider readiness") {
+		t.Fatalf("error = %v, want provider readiness context", err)
+	}
+}
+
 func TestACPAgentBuildArgsUsesExecMode(t *testing.T) {
 	a := &acpxAgent{target: "gemini"}
 	args := a.buildArgs(RunOpts{Prompt: "do work"})

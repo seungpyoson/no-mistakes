@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -57,7 +58,7 @@ func TestExecutor_AutoFixTriggersWithoutApproval(t *testing.T) {
 	}
 }
 
-func TestExecutor_AutoFixRespectsMaxAttempts(t *testing.T) {
+func TestExecutor_AutoFixMaxAttemptsPausesWhenAskUserFindingsRemain(t *testing.T) {
 	database, p, run, repo := setupTest(t)
 	workDir := t.TempDir()
 
@@ -73,7 +74,7 @@ func TestExecutor_AutoFixRespectsMaxAttempts(t *testing.T) {
 			return &StepOutcome{
 				NeedsApproval: true,
 				AutoFixable:   true,
-				Findings:      `{"findings":[{"severity":"warning","description":"style issue","action":"auto-fix"}],"summary":"lint issue"}`,
+				Findings:      `{"findings":[{"id":"lint-1","severity":"warning","description":"style issue","action":"auto-fix"},{"id":"lint-2","severity":"warning","description":"needs human decision","action":"ask-user"}],"summary":"lint issue"}`,
 			}, nil
 		},
 	}
@@ -104,6 +105,52 @@ func TestExecutor_AutoFixRespectsMaxAttempts(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("executor timed out")
+	}
+}
+
+func TestExecutor_AutoFixLimitFailureRecordsModelFixLoop(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+
+	cfg := &config.Config{AutoFix: config.AutoFix{Review: 2}}
+
+	callCount := 0
+	step := &adaptiveCallStep{
+		name: types.StepReview,
+		fn: func(_ *StepContext) (*StepOutcome, error) {
+			callCount++
+			return &StepOutcome{
+				NeedsApproval: true,
+				AutoFixable:   true,
+				Findings:      `{"findings":[{"id":"review-1","severity":"warning","description":"same auto-fix remains","action":"auto-fix"}],"summary":"1 finding"}`,
+			}, nil
+		},
+	}
+
+	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
+
+	err := exec.Execute(context.Background(), run, repo, workDir)
+	if err == nil {
+		t.Fatal("expected model_fix_loop error")
+	}
+	if callCount != 3 {
+		t.Fatalf("call count = %d, want 3", callCount)
+	}
+
+	updated, err := database.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.ErrorCode == nil || *updated.ErrorCode != string(types.FailureModelFixLoop) {
+		t.Fatalf("run error_code = %v, want %q", updated.ErrorCode, types.FailureModelFixLoop)
+	}
+
+	steps, err := database.GetStepsByRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if steps[0].ErrorCode == nil || *steps[0].ErrorCode != string(types.FailureModelFixLoop) {
+		t.Fatalf("step error_code = %v, want %q", steps[0].ErrorCode, types.FailureModelFixLoop)
 	}
 }
 
@@ -448,6 +495,89 @@ func TestExecutor_AutoFixMixedFindings(t *testing.T) {
 	}
 
 	exec.Respond(types.StepReview, types.ActionApprove, nil)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("expected no error, got: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("executor timed out")
+	}
+}
+
+func TestExecutor_UserSelectedFindingsBlockNewAutoFixUntilReviewed(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+	initGitRepo(t, workDir)
+
+	cfg := &config.Config{AutoFix: config.AutoFix{Review: 3}}
+
+	callCount := 0
+	step := &adaptiveCallStep{
+		name: types.StepReview,
+		fn: func(sctx *StepContext) (*StepOutcome, error) {
+			callCount++
+			switch callCount {
+			case 1:
+				return &StepOutcome{
+					NeedsApproval: true,
+					AutoFixable:   true,
+					Findings: `{"findings":[
+						{"id":"F1","severity":"warning","description":"approval state needs a guard","action":"ask-user"},
+						{"id":"F2","severity":"warning","description":"provider failure needs a guard","action":"ask-user"},
+						{"id":"F3","severity":"warning","description":"workspace match can leak","action":"ask-user"}
+					],"summary":"3 issues"}`,
+				}, nil
+			case 2:
+				if !sctx.Fixing {
+					t.Error("expected user fix re-execution")
+				}
+				parsed, err := types.ParseFindingsJSON(sctx.PreviousFindings)
+				if err != nil {
+					t.Errorf("parse previous findings: %v", err)
+				}
+				if len(parsed.Items) != 3 {
+					t.Errorf("expected 3 user-selected findings, got %d", len(parsed.Items))
+				}
+				return &StepOutcome{
+					NeedsApproval: true,
+					AutoFixable:   true,
+					Findings: `{"findings":[
+						{"id":"F1","severity":"warning","description":"approval state still needs a guard","action":"ask-user"},
+						{"id":"F2","severity":"warning","description":"provider failure still needs a guard","action":"ask-user"},
+						{"id":"F3","severity":"warning","description":"workspace match still can leak","action":"ask-user"},
+						{"id":"F4","severity":"info","description":"dead canonical workspace fallback","action":"auto-fix"}
+					],"summary":"4 issues"}`,
+				}, nil
+			default:
+				return nil, errors.New("executor auto-fixed a new finding before surfacing unresolved user-selected findings")
+			}
+		},
+	}
+
+	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- exec.Execute(context.Background(), run, repo, workDir)
+	}()
+
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+
+	if err := exec.Respond(types.StepReview, types.ActionFix, []string{"F1", "F2", "F3"}); err != nil {
+		t.Fatalf("respond fix: %v", err)
+	}
+
+	waitForStepStatusOrDone(t, database, run.ID, types.StepReview, types.StepStatusFixReview, done)
+
+	if callCount != 2 {
+		t.Fatalf("expected executor to stop after user fix review, got %d calls", callCount)
+	}
+
+	if err := exec.Respond(types.StepReview, types.ActionApprove, nil); err != nil {
+		t.Fatalf("respond approve: %v", err)
+	}
 
 	select {
 	case err := <-done:

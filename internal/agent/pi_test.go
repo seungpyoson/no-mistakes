@@ -64,6 +64,27 @@ func TestPiAgent_BuildPromptOmitsContractWhenSchemaEmpty(t *testing.T) {
 	}
 }
 
+func TestPiAgent_PreflightFailsOnProviderReadinessWarnings(t *testing.T) {
+	dir := t.TempDir()
+	bin := writeFakePi(t, dir, `#!/bin/sh
+printf '%s\n' '[sync-llm-config] env_key POOLSIDE_API_KEY is configured but the environment variable is not set' >&2
+exit 1
+`, strings.Join([]string{
+		"@echo off",
+		"echo [sync-llm-config] env_key POOLSIDE_API_KEY is configured but the environment variable is not set 1>&2",
+		"exit /b 1",
+	}, "\r\n"))
+
+	pa := &piAgent{bin: bin}
+	err := pa.Preflight(context.Background())
+	if err == nil {
+		t.Fatal("expected readiness error")
+	}
+	if !strings.Contains(err.Error(), "provider readiness") {
+		t.Fatalf("error = %v, want provider readiness context", err)
+	}
+}
+
 func writeFakePi(t *testing.T, dir, posixScript, windowsScript string) string {
 	t.Helper()
 

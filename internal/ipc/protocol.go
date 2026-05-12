@@ -179,6 +179,7 @@ type RunInfo struct {
 	Status    types.RunStatus  `json:"status"`
 	PRURL     *string          `json:"pr_url,omitempty"`
 	Error     *string          `json:"error,omitempty"`
+	ErrorCode *string          `json:"error_code,omitempty"`
 	Steps     []StepResultInfo `json:"steps,omitempty"`
 	CreatedAt int64            `json:"created_at"`
 	UpdatedAt int64            `json:"updated_at"`
@@ -195,6 +196,7 @@ type StepResultInfo struct {
 	DurationMS   *int64           `json:"duration_ms,omitempty"`
 	FindingsJSON *string          `json:"findings_json,omitempty"`
 	Error        *string          `json:"error,omitempty"`
+	ErrorCode    *string          `json:"error_code,omitempty"`
 	StartedAt    *int64           `json:"started_at,omitempty"`
 	CompletedAt  *int64           `json:"completed_at,omitempty"`
 }

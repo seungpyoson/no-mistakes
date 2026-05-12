@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,6 +66,190 @@ func TestExecutor_ApprovalFix(t *testing.T) {
 	// Step should have been called twice (initial + after fix)
 	if callCount != 2 {
 		t.Errorf("expected step to be called 2 times, got %d", callCount)
+	}
+}
+
+func TestExecutor_ApprovalSkipSkipsCurrentStepAndContinues(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+
+	review := &adaptiveCallStep{
+		name: types.StepReview,
+		fn: func(_ *StepContext) (*StepOutcome, error) {
+			return &StepOutcome{
+				NeedsApproval: true,
+				Findings:      `{"findings":[{"id":"review-1","severity":"warning","description":"false positive","action":"ask-user"}],"summary":"1 finding"}`,
+			}, nil
+		},
+	}
+	testStep := newPassStep(types.StepTest)
+
+	exec := NewExecutor(database, p, nil, nil, []Step{review, testStep}, nil)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- exec.Execute(context.Background(), run, repo, workDir)
+	}()
+
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+
+	if err := exec.Respond(types.StepReview, types.ActionSkip, []string{"review-1"}); err != nil {
+		t.Fatalf("respond skip: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("expected no error, got: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("executor timed out")
+	}
+
+	dbSteps, err := database.GetStepsByRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dbSteps[0].Status != types.StepStatusSkipped {
+		t.Fatalf("review status = %q, want %q", dbSteps[0].Status, types.StepStatusSkipped)
+	}
+	if dbSteps[1].Status != types.StepStatusCompleted {
+		t.Fatalf("test status = %q, want %q", dbSteps[1].Status, types.StepStatusCompleted)
+	}
+}
+
+func TestExecutor_ApprovalSkipRecordsRejectedFindingRationale(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+
+	review := newApprovalStep(types.StepReview, `{"findings":[{"id":"review-1","severity":"warning","description":"false positive","action":"ask-user"}],"summary":"1 finding"}`)
+	exec := NewExecutor(database, p, nil, nil, []Step{review}, nil)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- exec.Execute(context.Background(), run, repo, workDir)
+	}()
+
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+
+	instructions := map[string]string{"review-1": "false positive: generated file is intentionally checked in"}
+	if err := exec.RespondWithOverrides(types.StepReview, types.ActionSkip, []string{"review-1"}, instructions, nil); err != nil {
+		t.Fatalf("respond skip: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("expected no error, got: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("executor timed out")
+	}
+
+	steps, err := database.GetStepsByRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rounds, err := database.GetRoundsByStep(steps[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rounds[0].SelectedFindingIDs == nil || *rounds[0].SelectedFindingIDs != `["review-1"]` {
+		t.Fatalf("selected_finding_ids = %v, want [review-1]", rounds[0].SelectedFindingIDs)
+	}
+	if rounds[0].UserFindingsJSON == nil || !strings.Contains(*rounds[0].UserFindingsJSON, "false positive: generated file") {
+		t.Fatalf("user_findings_json = %v, want rejection rationale", rounds[0].UserFindingsJSON)
+	}
+}
+
+func TestExecutor_ApprovalAbortRecordsUserAbortCode(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+
+	review := newApprovalStep(types.StepReview, `{"findings":[{"id":"review-1","severity":"error","description":"stop","action":"ask-user"}],"summary":"1 finding"}`)
+	exec := NewExecutor(database, p, nil, nil, []Step{review}, nil)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- exec.Execute(context.Background(), run, repo, workDir)
+	}()
+
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+
+	if err := exec.Respond(types.StepReview, types.ActionAbort, nil); err != nil {
+		t.Fatalf("respond abort: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected abort error")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("executor timed out")
+	}
+
+	updated, err := database.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != types.RunFailed {
+		t.Fatalf("run status = %q, want %q", updated.Status, types.RunFailed)
+	}
+	if updated.ErrorCode == nil || *updated.ErrorCode != string(types.FailureUserAbort) {
+		t.Fatalf("run error_code = %v, want %q", updated.ErrorCode, types.FailureUserAbort)
+	}
+
+	dbSteps, err := database.GetStepsByRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dbSteps[0].ErrorCode == nil || *dbSteps[0].ErrorCode != string(types.FailureUserAbort) {
+		t.Fatalf("step error_code = %v, want %q", dbSteps[0].ErrorCode, types.FailureUserAbort)
+	}
+}
+
+func TestExecutor_ApprovalAbortRecordsRejectedFindingRationale(t *testing.T) {
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+
+	review := newApprovalStep(types.StepReview, `{"findings":[{"id":"review-1","severity":"warning","description":"stop here","action":"ask-user"}],"summary":"1 finding"}`)
+	exec := NewExecutor(database, p, nil, nil, []Step{review}, nil)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- exec.Execute(context.Background(), run, repo, workDir)
+	}()
+
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+
+	instructions := map[string]string{"review-1": "abort because the finding needs manual investigation"}
+	if err := exec.RespondWithOverrides(types.StepReview, types.ActionAbort, []string{"review-1"}, instructions, nil); err != nil {
+		t.Fatalf("respond abort: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected abort error")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("executor timed out")
+	}
+
+	steps, err := database.GetStepsByRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rounds, err := database.GetRoundsByStep(steps[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rounds[0].SelectedFindingIDs == nil || *rounds[0].SelectedFindingIDs != `["review-1"]` {
+		t.Fatalf("selected_finding_ids = %v, want [review-1]", rounds[0].SelectedFindingIDs)
+	}
+	if rounds[0].UserFindingsJSON == nil || !strings.Contains(*rounds[0].UserFindingsJSON, "manual investigation") {
+		t.Fatalf("user_findings_json = %v, want abort rationale", rounds[0].UserFindingsJSON)
 	}
 }
 

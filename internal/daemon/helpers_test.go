@@ -328,6 +328,27 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"structured
 	return path
 }
 
+func writeReadinessFailingPi(t *testing.T, dir string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		path := filepath.Join(dir, "pi.bat")
+		script := "@echo off\r\necho [sync-llm-config] env_key POOLSIDE_API_KEY is configured but the environment variable is not set 1>&2\r\nexit /b 1\r\n"
+		if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	path := filepath.Join(dir, "pi")
+	script := `#!/bin/sh
+printf '%s\n' '[sync-llm-config] env_key POOLSIDE_API_KEY is configured but the environment variable is not set' >&2
+exit 1
+`
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func waitForRunTerminalState(t *testing.T, d *db.DB, runID string) *db.Run {
 	t.Helper()
 
