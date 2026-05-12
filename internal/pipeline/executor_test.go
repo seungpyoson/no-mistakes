@@ -196,6 +196,7 @@ func TestExecutor_StepErrorRecordsTypedFailureCode(t *testing.T) {
 	exec := NewExecutor(database, p, nil, nil, []Step{
 		newFailStep(types.StepTest, fmt.Errorf("tests crashed")),
 	}, nil)
+	events := collectEvents(exec)
 
 	if err := exec.Execute(context.Background(), run, repo, workDir); err == nil {
 		t.Fatal("expected error, got nil")
@@ -215,6 +216,14 @@ func TestExecutor_StepErrorRecordsTypedFailureCode(t *testing.T) {
 	}
 	if dbSteps[0].ErrorCode == nil || *dbSteps[0].ErrorCode != string(types.FailureTestFailure) {
 		t.Fatalf("step error_code = %v, want %q", dbSteps[0].ErrorCode, types.FailureTestFailure)
+	}
+
+	event := events.find(ipc.EventStepCompleted, types.StepTest)
+	if event == nil {
+		t.Fatal("missing step_completed event")
+	}
+	if event.ErrorCode == nil || *event.ErrorCode != string(types.FailureTestFailure) {
+		t.Fatalf("event error_code = %v, want %q", event.ErrorCode, types.FailureTestFailure)
 	}
 }
 
