@@ -15,7 +15,9 @@ func newRunsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "runs",
 		Short: "List pipeline runs for the current repository",
-		Args:  cobra.NoArgs,
+		Long: "List pipeline runs for the current repository.\n\n" +
+			"Output includes branch, status, short SHA, timestamp, error_code when set, and PR URL when set.",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return trackCommand("runs", func() error {
 				_, d, err := openResources()
