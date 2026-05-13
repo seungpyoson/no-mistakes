@@ -192,7 +192,7 @@ sqlite3 ~/.no-mistakes/state.sqlite \
 
 `error_code` separates no-mistakes/tool failures from reviewed-code failures:
 
-- `provider_unavailable`: provider/model config failed readiness, such as missing env key or unmatched model pattern.
+- `provider_unavailable`: the selected agent/provider is not available, such as a missing agent binary, missing env key, or unmatched model pattern.
 - `model_timeout`: model/tool call timed out.
 - `model_fix_loop`: selected findings made no progress and reached a terminal loop failure.
 - `tool_crash`: agent/tool process crashed or exited unexpectedly.
@@ -231,7 +231,7 @@ For false positives, select the finding, choose `skip`, and include a short rati
 
 ### Provider readiness
 
-Agents that implement preflight checks validate provider readiness before the review/fix loop starts. Missing env keys and unmatched model patterns should fail early with `provider_unavailable` instead of surfacing later as noisy agent stderr. `doctor` confirms local binaries and the daemon environment; the daemon log shows provider preflight failures:
+Agents that implement preflight checks validate provider readiness before the review/fix loop starts. Missing agent binaries, missing env keys, and unmatched model patterns should fail early with `provider_unavailable` instead of surfacing later as noisy agent stderr. `doctor` confirms local binaries and the daemon environment; the daemon log shows provider preflight failures:
 
 ```sh
 no-mistakes doctor

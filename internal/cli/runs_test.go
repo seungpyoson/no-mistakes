@@ -27,3 +27,13 @@ func TestPrintRunLineShowsErrorCode(t *testing.T) {
 		t.Fatalf("expected error code in run line, got: %q", got)
 	}
 }
+
+func TestRunsHelpMentionsErrorCode(t *testing.T) {
+	out, err := executeCmd("runs", "--help")
+	if err != nil {
+		t.Fatalf("runs --help error = %v", err)
+	}
+	if !strings.Contains(out, "error_code") {
+		t.Fatalf("runs --help should mention error_code, got:\n%s", out)
+	}
+}
