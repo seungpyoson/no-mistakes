@@ -333,7 +333,14 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 		}
 		if err := agent.Preflight(ctx, ag); err != nil {
 			msg := fmt.Sprintf("agent preflight: %s", err)
-			m.updateRunStartFailure(run.ID, msg, preflightFailureCode(err), "agent_preflight")
+			code := preflightFailureCode(err)
+			slog.Warn("agent_preflight_failed",
+				"run_id", run.ID,
+				"phase", "agent_preflight",
+				"agent", cfg.Agent,
+				"error_code", code,
+			)
+			m.updateRunStartFailure(run.ID, msg, code, "agent_preflight")
 			trackStartFailure("agent_preflight")
 			return "", fmt.Errorf("agent preflight: %w", err)
 		}

@@ -1,13 +1,18 @@
 package pipeline
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/config"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
@@ -203,5 +208,254 @@ func TestExecutor_LogFileMultipleSteps(t *testing.T) {
 	// Review log should NOT contain test message
 	if strings.Contains(string(reviewLog), "test message") {
 		t.Error("review log should not contain test message")
+	}
+}
+
+func TestExecutor_LogsAutoFixBlockedAfterUserFix(t *testing.T) {
+	var logs bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(oldLogger)
+
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+	initGitRepo(t, workDir)
+
+	cfg := &config.Config{AutoFix: config.AutoFix{Review: 3}}
+
+	callCount := 0
+	step := &adaptiveCallStep{
+		name: types.StepReview,
+		fn: func(sctx *StepContext) (*StepOutcome, error) {
+			callCount++
+			switch callCount {
+			case 1:
+				return &StepOutcome{
+					NeedsApproval: true,
+					AutoFixable:   true,
+					Findings: `{"findings":[
+						{"id":"F1","severity":"warning","description":"approval state needs a guard","action":"ask-user"}
+					],"summary":"1 issue"}`,
+				}, nil
+			case 2:
+				return &StepOutcome{
+					NeedsApproval: true,
+					AutoFixable:   true,
+					Findings: `{"findings":[
+						{"id":"F1","severity":"warning","description":"approval state still needs a guard","action":"ask-user"},
+						{"id":"F2","severity":"info","description":"unrelated auto fix","action":"auto-fix"}
+					],"summary":"2 issues"}`,
+				}, nil
+			default:
+				t.Fatalf("unexpected extra execution after auto-fix should have been blocked")
+				return nil, nil
+			}
+		},
+	}
+
+	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- exec.Execute(context.Background(), run, repo, workDir)
+	}()
+
+	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
+
+	if err := exec.Respond(types.StepReview, types.ActionFix, []string{"F1"}); err != nil {
+		t.Fatalf("respond fix: %v", err)
+	}
+
+	waitForStepStatusOrDone(t, database, run.ID, types.StepReview, types.StepStatusFixReview, done)
+
+	if err := exec.Respond(types.StepReview, types.ActionApprove, nil); err != nil {
+		t.Fatalf("respond approve: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("expected no error, got: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("executor timed out")
+	}
+
+	output := logs.String()
+	for _, want := range []string{
+		`"msg":"review_auto_fix_blocked_after_user_fix"`,
+		`"run_id":"` + run.ID + `"`,
+		`"step":"review"`,
+		`"round":2`,
+		`"last_fix_source":"user"`,
+		`"ask_user_count":1`,
+		`"auto_fix_count":1`,
+		`"auto_fix_attempts":0`,
+		`"auto_fix_limit":3`,
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected log output to contain %s, got:\n%s", want, output)
+		}
+	}
+}
+
+func TestExecutor_LogsAutoFixSelectedAndApprovalRequested(t *testing.T) {
+	var logs bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(oldLogger)
+
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+	initGitRepo(t, workDir)
+
+	cfg := &config.Config{AutoFix: config.AutoFix{Review: 3}}
+
+	callCount := 0
+	step := &adaptiveCallStep{
+		name: types.StepReview,
+		fn: func(sctx *StepContext) (*StepOutcome, error) {
+			callCount++
+			switch callCount {
+			case 1:
+				return &StepOutcome{
+					AutoFixable: true,
+					Findings: `{"findings":[
+						{"id":"F1","severity":"warning","description":"auto fix this","action":"auto-fix"}
+					],"summary":"1 issue"}`,
+				}, nil
+			case 2:
+				return &StepOutcome{
+					NeedsApproval: true,
+					Findings: `{"findings":[
+						{"id":"F2","severity":"warning","description":"needs review","action":"ask-user"}
+					],"summary":"1 issue"}`,
+				}, nil
+			default:
+				t.Fatalf("unexpected extra execution")
+				return nil, nil
+			}
+		},
+	}
+
+	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- exec.Execute(context.Background(), run, repo, workDir)
+	}()
+
+	waitForStepStatusOrDone(t, database, run.ID, types.StepReview, types.StepStatusFixReview, done)
+
+	if err := exec.Respond(types.StepReview, types.ActionApprove, nil); err != nil {
+		t.Fatalf("respond approve: %v", err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("expected no error, got: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("executor timed out")
+	}
+
+	output := logs.String()
+	for _, want := range []string{
+		`"msg":"review_auto_fix_selected"`,
+		`"attempt":1`,
+		`"auto_fix_limit":3`,
+		`"auto_fix_count":1`,
+		`"msg":"review_approval_requested"`,
+		`"status":"fix_review"`,
+		`"fixing":true`,
+		`"ask_user_count":1`,
+		`"auto_fix_attempts":1`,
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected log output to contain %s, got:\n%s", want, output)
+		}
+	}
+}
+
+func TestExecutor_LogsModelFixLoop(t *testing.T) {
+	var logs bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(oldLogger)
+
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+	initGitRepo(t, workDir)
+
+	cfg := &config.Config{AutoFix: config.AutoFix{Review: 1}}
+
+	step := &adaptiveCallStep{
+		name: types.StepReview,
+		fn: func(sctx *StepContext) (*StepOutcome, error) {
+			return &StepOutcome{
+				AutoFixable: true,
+				Findings: `{"findings":[
+					{"id":"F1","severity":"warning","description":"same finding remains","action":"auto-fix"}
+				],"summary":"1 issue"}`,
+			}, nil
+		},
+	}
+
+	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
+
+	err := exec.Execute(context.Background(), run, repo, workDir)
+	if err == nil {
+		t.Fatal("expected model_fix_loop error")
+	}
+
+	output := logs.String()
+	for _, want := range []string{
+		`"msg":"review_model_fix_loop"`,
+		`"run_id":"` + run.ID + `"`,
+		`"step":"review"`,
+		`"auto_fix_count":1`,
+		`"auto_fix_attempts":1`,
+		`"auto_fix_limit":1`,
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected log output to contain %s, got:\n%s", want, output)
+		}
+	}
+}
+
+func TestExecutor_LogsRunFailedWithErrorCode(t *testing.T) {
+	var logs bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(oldLogger)
+
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+
+	step := &adaptiveCallStep{
+		name: types.StepReview,
+		fn: func(sctx *StepContext) (*StepOutcome, error) {
+			return nil, errors.New("agent process crashed")
+		},
+	}
+
+	exec := NewExecutor(database, p, nil, nil, []Step{step}, nil)
+
+	err := exec.Execute(context.Background(), run, repo, workDir)
+	if err == nil {
+		t.Fatal("expected run failure")
+	}
+
+	output := logs.String()
+	for _, want := range []string{
+		`"msg":"run_failed_with_error_code"`,
+		`"run_id":"` + run.ID + `"`,
+		`"status":"failed"`,
+		`"error_code":"tool_crash"`,
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected log output to contain %s, got:\n%s", want, output)
+		}
 	}
 }
