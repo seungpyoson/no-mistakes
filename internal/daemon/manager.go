@@ -213,6 +213,26 @@ func (m *RunManager) HandleRerun(ctx context.Context, repoID, branch string) (st
 	return m.startRun(ctx, repo, branch, headSHA, baseSHA, "rerun", nil)
 }
 
+func (m *RunManager) updateRunStartFailure(runID, msg string, code types.FailureCode, phase string) {
+	if dbErr := m.db.UpdateRunErrorStatusCode(runID, msg, types.RunFailed, code); dbErr != nil {
+		slog.Error("failed to update run after start failure", "run_id", runID, "phase", phase, "error", dbErr)
+	}
+}
+
+func preflightFailureCode(err error) types.FailureCode {
+	msg := strings.ToLower(fmt.Sprint(err))
+	switch {
+	case strings.Contains(msg, "provider readiness:"):
+		return types.FailureProviderUnavailable
+	case strings.Contains(msg, "deadline exceeded"),
+		strings.Contains(msg, "timed out"),
+		strings.Contains(msg, "timeout"):
+		return types.FailureModelTimeout
+	default:
+		return types.FailureToolCrash
+	}
+}
+
 // startRun creates a run, sets up a worktree, and launches pipeline execution.
 func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSHA, baseSHA, trigger string, skipSteps []types.StepName) (string, error) {
 	branchRole := telemetryBranchRole(branch, repo.DefaultBranch)
@@ -252,12 +272,12 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 	gateDir := m.paths.RepoDir(repo.ID)
 	wtDir := m.paths.WorktreeDir(repo.ID, run.ID)
 	if err := git.WorktreeAdd(ctx, gateDir, wtDir, headSHA); err != nil {
-		m.db.UpdateRunError(run.ID, fmt.Sprintf("create worktree: %s", err))
+		m.updateRunStartFailure(run.ID, fmt.Sprintf("create worktree: %s", err), types.FailureToolCrash, "create_worktree")
 		trackStartFailure("create_worktree")
 		return "", fmt.Errorf("create worktree: %w", err)
 	}
 	if err := git.CopyLocalUserIdentity(ctx, repo.WorkingPath, wtDir); err != nil {
-		m.db.UpdateRunError(run.ID, fmt.Sprintf("configure worktree git identity: %s", err))
+		m.updateRunStartFailure(run.ID, fmt.Sprintf("configure worktree git identity: %s", err), types.FailureToolCrash, "configure_worktree_identity")
 		trackStartFailure("configure_worktree_identity")
 		return "", fmt.Errorf("configure worktree git identity: %w", err)
 	}
@@ -280,13 +300,13 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 
 	globalCfg, err := config.LoadGlobal(m.paths.ConfigFile())
 	if err != nil {
-		m.db.UpdateRunError(run.ID, fmt.Sprintf("load config: %s", err))
+		m.updateRunStartFailure(run.ID, fmt.Sprintf("load config: %s", err), types.FailureToolCrash, "load_global_config")
 		trackStartFailure("load_global_config")
 		return "", fmt.Errorf("load global config: %w", err)
 	}
 	repoCfg, err := config.LoadRepo(wtDir)
 	if err != nil {
-		m.db.UpdateRunError(run.ID, fmt.Sprintf("load config: %s", err))
+		m.updateRunStartFailure(run.ID, fmt.Sprintf("load config: %s", err), types.FailureToolCrash, "load_repo_config")
 		trackStartFailure("load_repo_config")
 		return "", fmt.Errorf("load repo config: %w", err)
 	}
@@ -298,7 +318,7 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 		ag = agent.NewNoop()
 	} else {
 		if err := cfg.ResolveAgent(ctx, exec.LookPath); err != nil {
-			m.db.UpdateRunError(run.ID, err.Error())
+			m.updateRunStartFailure(run.ID, err.Error(), types.FailureProviderUnavailable, "resolve_agent")
 			trackStartFailure("resolve_agent")
 			return "", err
 		}
@@ -307,13 +327,13 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 			ACPRegistryOverrides: cfg.ACPRegistryOverrides,
 		})
 		if agErr != nil {
-			m.db.UpdateRunError(run.ID, fmt.Sprintf("create agent: %s", agErr))
+			m.updateRunStartFailure(run.ID, fmt.Sprintf("create agent: %s", agErr), types.FailureProviderUnavailable, "create_agent")
 			trackStartFailure("create_agent")
 			return "", fmt.Errorf("create agent: %w", agErr)
 		}
 		if err := agent.Preflight(ctx, ag); err != nil {
 			msg := fmt.Sprintf("agent preflight: %s", err)
-			m.db.UpdateRunErrorStatusCode(run.ID, msg, types.RunFailed, types.FailureProviderUnavailable)
+			m.updateRunStartFailure(run.ID, msg, preflightFailureCode(err), "agent_preflight")
 			trackStartFailure("agent_preflight")
 			return "", fmt.Errorf("agent preflight: %w", err)
 		}
@@ -371,7 +391,7 @@ func (m *RunManager) startRun(ctx context.Context, repo *db.Repo, branch, headSH
 					fields["failed_step"] = failedStep
 				}
 				telemetry.Track("run", fields)
-				if dbErr := m.db.UpdateRunErrorStatus(run.ID, errMsg, types.RunFailed); dbErr != nil {
+				if dbErr := m.db.UpdateRunErrorStatusCode(run.ID, errMsg, types.RunFailed, types.FailureToolCrash); dbErr != nil {
 					slog.Error("failed to update run after panic", "run_id", run.ID, "error", dbErr)
 				}
 			}

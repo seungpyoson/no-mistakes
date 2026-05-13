@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kunchenguid/no-mistakes/internal/db"
 	"github.com/kunchenguid/no-mistakes/internal/ipc"
 	"github.com/kunchenguid/no-mistakes/internal/pipeline"
 	"github.com/kunchenguid/no-mistakes/internal/telemetry"
@@ -180,6 +181,160 @@ func TestPushReceivedPreflightsAgentBeforePipelineSteps(t *testing.T) {
 	}
 }
 
+func TestPushReceivedPreflightToolFailureRecordsToolCrash(t *testing.T) {
+	review := &mockPassStep{name: types.StepReview}
+	p, d := startTestDaemonWithSteps(t, func() []pipeline.Step {
+		return []pipeline.Step{review}
+	})
+
+	crashingPi := writeCrashingPi(t, t.TempDir())
+	configYAML := "agent: pi\nagent_path_override:\n  pi: " + crashingPi + "\n"
+	if err := os.WriteFile(p.ConfigFile(), []byte(configYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, headSHA := setupTestGitRepo(t, p, d, "preflight-tool-crash-run-repo")
+
+	client, err := ipc.Dial(p.Socket())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	var result ipc.PushReceivedResult
+	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
+		Gate: p.RepoDir("preflight-tool-crash-run-repo"),
+		Ref:  "refs/heads/main",
+		Old:  "0000000000000000000000000000000000000000",
+		New:  headSHA,
+	}, &result)
+	if err == nil {
+		t.Fatal("expected push_received to fail preflight")
+	}
+
+	runs, err := d.GetRunsByRepo("preflight-tool-crash-run-repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("runs = %d, want 1", len(runs))
+	}
+	run := runs[0]
+	if run.Status != types.RunFailed {
+		t.Fatalf("run status = %q, want %q", run.Status, types.RunFailed)
+	}
+	if run.ErrorCode == nil || *run.ErrorCode != string(types.FailureToolCrash) {
+		t.Fatalf("run error_code = %v, want %q", run.ErrorCode, types.FailureToolCrash)
+	}
+	if got := review.execCnt.Load(); got != 0 {
+		t.Fatalf("review executed %d times, want 0", got)
+	}
+}
+
+func TestPushReceivedAgentResolutionFailureRecordsProviderUnavailable(t *testing.T) {
+	review := &mockPassStep{name: types.StepReview}
+	p, d := startTestDaemonWithSteps(t, func() []pipeline.Step {
+		return []pipeline.Step{review}
+	})
+
+	configYAML := `agent: auto
+agent_path_override:
+  claude: /no/such/claude
+  codex: /no/such/codex
+  opencode: /no/such/opencode
+  rovodev: /no/such/acli
+  pi: /no/such/pi
+`
+	if err := os.WriteFile(p.ConfigFile(), []byte(configYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, headSHA := setupTestGitRepo(t, p, d, "agent-resolution-run-repo")
+
+	client, err := ipc.Dial(p.Socket())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	var result ipc.PushReceivedResult
+	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
+		Gate: p.RepoDir("agent-resolution-run-repo"),
+		Ref:  "refs/heads/main",
+		Old:  "0000000000000000000000000000000000000000",
+		New:  headSHA,
+	}, &result)
+	if err == nil {
+		t.Fatal("expected push_received to fail agent resolution")
+	}
+
+	runs, err := d.GetRunsByRepo("agent-resolution-run-repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("runs = %d, want 1", len(runs))
+	}
+	run := runs[0]
+	if run.Status != types.RunFailed {
+		t.Fatalf("run status = %q, want %q", run.Status, types.RunFailed)
+	}
+	if run.ErrorCode == nil || *run.ErrorCode != string(types.FailureProviderUnavailable) {
+		t.Fatalf("run error_code = %v, want %q", run.ErrorCode, types.FailureProviderUnavailable)
+	}
+	if got := review.execCnt.Load(); got != 0 {
+		t.Fatalf("review executed %d times, want 0", got)
+	}
+}
+
+func TestPushReceivedConfigLoadFailureRecordsToolCrash(t *testing.T) {
+	review := &mockPassStep{name: types.StepReview}
+	p, d := startTestDaemonWithSteps(t, func() []pipeline.Step {
+		return []pipeline.Step{review}
+	})
+
+	if err := os.WriteFile(p.ConfigFile(), []byte("agent: [\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, headSHA := setupTestGitRepo(t, p, d, "config-load-run-repo")
+
+	client, err := ipc.Dial(p.Socket())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	var result ipc.PushReceivedResult
+	err = client.Call(ipc.MethodPushReceived, &ipc.PushReceivedParams{
+		Gate: p.RepoDir("config-load-run-repo"),
+		Ref:  "refs/heads/main",
+		Old:  "0000000000000000000000000000000000000000",
+		New:  headSHA,
+	}, &result)
+	if err == nil {
+		t.Fatal("expected push_received to fail config load")
+	}
+
+	runs, err := d.GetRunsByRepo("config-load-run-repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("runs = %d, want 1", len(runs))
+	}
+	run := runs[0]
+	if run.Status != types.RunFailed {
+		t.Fatalf("run status = %q, want %q", run.Status, types.RunFailed)
+	}
+	if run.ErrorCode == nil || *run.ErrorCode != string(types.FailureToolCrash) {
+		t.Fatalf("run error_code = %v, want %q", run.ErrorCode, types.FailureToolCrash)
+	}
+	if got := review.execCnt.Load(); got != 0 {
+		t.Fatalf("review executed %d times, want 0", got)
+	}
+}
+
 func TestPushReceivedReturnsBeforeIntentSummarization(t *testing.T) {
 	fakeHome := t.TempDir()
 	t.Setenv("HOME", fakeHome)
@@ -270,8 +425,9 @@ func TestPushReceivedTracksRunTelemetryAfterPanic(t *testing.T) {
 	}
 
 	deadline := time.Now().Add(5 * time.Second)
+	var run *db.Run
 	for time.Now().Before(deadline) {
-		run, err := d.GetRun(result.RunID)
+		run, err = d.GetRun(result.RunID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -279,6 +435,12 @@ func TestPushReceivedTracksRunTelemetryAfterPanic(t *testing.T) {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+	if run == nil || run.Error == nil || !strings.Contains(*run.Error, "internal panic") {
+		t.Fatal("expected run to record internal panic error")
+	}
+	if run.ErrorCode == nil || *run.ErrorCode != string(types.FailureToolCrash) {
+		t.Fatalf("run error_code = %v, want %q", run.ErrorCode, types.FailureToolCrash)
 	}
 
 	finished := recorder.find("run", "action", "finished")

@@ -133,7 +133,8 @@ func TestExecutor_ApprovalSkipRecordsRejectedFindingRationale(t *testing.T) {
 	waitForStepStatus(t, database, run.ID, types.StepReview, types.StepStatusAwaitingApproval)
 
 	instructions := map[string]string{"review-1": "false positive: generated file is intentionally checked in"}
-	if err := exec.RespondWithOverrides(types.StepReview, types.ActionSkip, []string{"review-1"}, instructions, nil); err != nil {
+	added := []types.Finding{{Severity: "warning", Description: "manual follow-up finding", Action: types.ActionAskUser}}
+	if err := exec.RespondWithOverrides(types.StepReview, types.ActionSkip, []string{"review-1"}, instructions, added); err != nil {
 		t.Fatalf("respond skip: %v", err)
 	}
 
@@ -154,11 +155,14 @@ func TestExecutor_ApprovalSkipRecordsRejectedFindingRationale(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rounds[0].SelectedFindingIDs == nil || *rounds[0].SelectedFindingIDs != `["review-1"]` {
-		t.Fatalf("selected_finding_ids = %v, want [review-1]", rounds[0].SelectedFindingIDs)
+	if rounds[0].SelectedFindingIDs == nil || *rounds[0].SelectedFindingIDs != `["review-1","user-1"]` {
+		t.Fatalf("selected_finding_ids = %v, want [review-1,user-1]", rounds[0].SelectedFindingIDs)
 	}
 	if rounds[0].UserFindingsJSON == nil || !strings.Contains(*rounds[0].UserFindingsJSON, "false positive: generated file") {
 		t.Fatalf("user_findings_json = %v, want rejection rationale", rounds[0].UserFindingsJSON)
+	}
+	if !strings.Contains(*rounds[0].UserFindingsJSON, "manual follow-up finding") {
+		t.Fatalf("user_findings_json = %v, want user-added finding", rounds[0].UserFindingsJSON)
 	}
 }
 
