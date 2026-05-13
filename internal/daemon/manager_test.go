@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -182,6 +184,11 @@ func TestPushReceivedPreflightsAgentBeforePipelineSteps(t *testing.T) {
 }
 
 func TestPushReceivedPreflightToolFailureRecordsToolCrash(t *testing.T) {
+	var logs bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(oldLogger)
+
 	review := &mockPassStep{name: types.StepReview}
 	p, d := startTestDaemonWithSteps(t, func() []pipeline.Step {
 		return []pipeline.Step{review}
@@ -228,6 +235,18 @@ func TestPushReceivedPreflightToolFailureRecordsToolCrash(t *testing.T) {
 	}
 	if got := review.execCnt.Load(); got != 0 {
 		t.Fatalf("review executed %d times, want 0", got)
+	}
+
+	output := logs.String()
+	for _, want := range []string{
+		`"msg":"agent_preflight_failed"`,
+		`"run_id":"` + run.ID + `"`,
+		`"phase":"agent_preflight"`,
+		`"error_code":"tool_crash"`,
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected log output to contain %s, got:\n%s", want, output)
+		}
 	}
 }
 

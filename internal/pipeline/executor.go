@@ -314,12 +314,37 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		// After a user-requested fix, remaining ask-user findings must be
 		// surfaced for review before unrelated auto-fix findings can continue.
 		autoFixBlockedByUserFix := lastFixSource == db.RoundSelectionSourceUser && hasAskUserFindingsJSON(outcome.Findings)
+		fixableFindings := ""
+		if outcome.AutoFixable && autoFixLimit > 0 && autoFixAttempts < autoFixLimit {
+			fixableFindings = autoFixableFindingsJSON(outcome.Findings)
+		}
+		if autoFixBlockedByUserFix && fixableFindings != "" {
+			slog.Info("review_auto_fix_blocked_after_user_fix",
+				"run_id", run.ID,
+				"step", stepName,
+				"round", roundNum,
+				"last_fix_source", lastFixSource,
+				"ask_user_count", findingsActionCount(outcome.Findings, types.ActionAskUser),
+				"auto_fix_count", findingsCount(fixableFindings),
+				"auto_fix_attempts", autoFixAttempts,
+				"auto_fix_limit", autoFixLimit,
+			)
+		}
 		if !autoFixBlockedByUserFix && outcome.AutoFixable && autoFixLimit > 0 && autoFixAttempts < autoFixLimit {
-			fixableFindings := autoFixableFindingsJSON(outcome.Findings)
 			if fixableFindings != "" {
 				autoFixAttempts++
 				telemetry.Track("fix", e.fixTelemetryFields("auto", stepName, findingsCount(fixableFindings), autoFixAttempts))
-				slog.Info("auto-fixing step", "step", stepName, "attempt", autoFixAttempts, "max", autoFixLimit)
+				slog.Info("review_auto_fix_selected",
+					"run_id", run.ID,
+					"step", stepName,
+					"round", roundNum,
+					"selection_source", db.RoundSelectionSourceAutoFix,
+					"auto_fix_count", findingsCount(fixableFindings),
+					"ask_user_count", findingsActionCount(outcome.Findings, types.ActionAskUser),
+					"attempt", autoFixAttempts,
+					"auto_fix_attempts", autoFixAttempts,
+					"auto_fix_limit", autoFixLimit,
+				)
 				executionMS += time.Since(phaseStart).Milliseconds()
 				if dbErr := e.db.UpdateStepStatus(sr.ID, types.StepStatusFixing); dbErr != nil {
 					slog.Warn("failed to update step status in db", "step", stepName, "status", "fixing", "error", dbErr)
@@ -344,6 +369,16 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 			autoFixableFindingsJSON(outcome.Findings) != "" && !hasAskUserFindingsJSON(outcome.Findings) {
 			durationMS := executionMS + time.Since(phaseStart).Milliseconds()
 			err := fmt.Errorf("%s: auto-fix limit reached with unresolved findings", types.FailureModelFixLoop)
+			slog.Info("review_model_fix_loop",
+				"run_id", run.ID,
+				"step", stepName,
+				"round", roundNum,
+				"auto_fix_count", findingsCount(autoFixableFindingsJSON(outcome.Findings)),
+				"ask_user_count", findingsActionCount(outcome.Findings, types.ActionAskUser),
+				"auto_fix_attempts", autoFixAttempts,
+				"auto_fix_limit", autoFixLimit,
+				"error_code", types.FailureModelFixLoop,
+			)
 			if dbErr := e.db.FailStepWithCode(sr.ID, err.Error(), durationMS, types.FailureModelFixLoop); dbErr != nil {
 				slog.Warn("failed to mark step as failed in db", "step", stepName, "error", dbErr)
 			}
@@ -391,6 +426,17 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 		if dbErr := e.db.SetStepDuration(sr.ID, executionMS); dbErr != nil {
 			slog.Warn("failed to set step duration in db", "step", stepName, "error", dbErr)
 		}
+		slog.Info("review_approval_requested",
+			"run_id", run.ID,
+			"step", stepName,
+			"round", roundNum,
+			"status", approvalStatus,
+			"fixing", sctx.Fixing,
+			"ask_user_count", findingsActionCount(outcome.Findings, types.ActionAskUser),
+			"auto_fix_count", findingsCount(autoFixableFindingsJSON(outcome.Findings)),
+			"auto_fix_attempts", autoFixAttempts,
+			"auto_fix_limit", autoFixLimit,
+		)
 		e.emitStepEventWithFindingsDiffAndError(ipc.EventStepCompleted, run, repo, stepName, string(approvalStatus), outcome.Findings, diffText, "", &executionMS)
 
 		response, err := e.waitForApproval(ctx, stepName)
@@ -574,6 +620,11 @@ func (e *Executor) failRun(run *db.Run, repo *db.Repo, err error, ctxs ...contex
 	if code != "" {
 		codeText := string(code)
 		run.ErrorCode = &codeText
+		slog.Info("run_failed_with_error_code",
+			"run_id", run.ID,
+			"status", runStatus,
+			"error_code", code,
+		)
 	} else {
 		run.ErrorCode = nil
 	}
@@ -708,6 +759,20 @@ func findingsCount(raw string) int {
 		return 0
 	}
 	return len(findings.Items)
+}
+
+func findingsActionCount(raw string, action string) int {
+	findings, err := types.ParseFindingsJSON(raw)
+	if err != nil {
+		return 0
+	}
+	count := 0
+	for _, item := range findings.Items {
+		if item.Action == action {
+			count++
+		}
+	}
+	return count
 }
 
 func selectedFindingCount(raw string, ids []string) int {
