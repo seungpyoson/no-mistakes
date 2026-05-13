@@ -425,13 +425,14 @@ func (e *Executor) executeStep(ctx context.Context, step Step, sr *db.StepResult
 
 		case types.ActionSkip:
 			if currentRoundID != "" {
-				if idsJSON := marshalFindingIDs(response.findingIDs); idsJSON != "" {
+				selectedFindings := filterFindingsJSON(outcome.Findings, response.findingIDs)
+				mergedFindings := mergeUserOverridesJSON(selectedFindings, response.instructions, response.addedFindings)
+				allSelectedIDs := combineSelectedFindingIDs(response.findingIDs, mergedFindings)
+				if idsJSON := marshalFindingIDs(allSelectedIDs); idsJSON != "" {
 					if dbErr := e.db.SetStepRoundSelection(currentRoundID, &idsJSON, db.RoundSelectionSourceUser); dbErr != nil {
 						slog.Warn("failed to record selected finding ids", "step", stepName, "round", roundNum, "error", dbErr)
 					}
 				}
-				selectedFindings := filterFindingsJSON(outcome.Findings, response.findingIDs)
-				mergedFindings := mergeUserOverridesJSON(selectedFindings, response.instructions, response.addedFindings)
 				if mergedFindings != "" && mergedFindings != selectedFindings {
 					merged := mergedFindings
 					if dbErr := e.db.SetStepRoundUserFindings(currentRoundID, &merged); dbErr != nil {
