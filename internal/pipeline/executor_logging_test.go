@@ -378,6 +378,71 @@ func TestExecutor_LogsAutoFixSelectedAndApprovalRequested(t *testing.T) {
 	}
 }
 
+// TestExecutor_ModelFixLoopGatedOnAskUserRemaining is the FR-011 negative case:
+// when the auto-fix limit is exhausted AND ask-user findings remain, the
+// executor MUST NOT emit review_model_fix_loop. It must fall through to
+// approval (review_approval_requested) so the operator can decide.
+func TestExecutor_ModelFixLoopGatedOnAskUserRemaining(t *testing.T) {
+	var logs bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(oldLogger)
+
+	database, p, run, repo := setupTest(t)
+	workDir := t.TempDir()
+	initGitRepo(t, workDir)
+
+	cfg := &config.Config{AutoFix: config.AutoFix{Review: 1}}
+
+	callCount := 0
+	step := &adaptiveCallStep{
+		name: types.StepReview,
+		fn: func(sctx *StepContext) (*StepOutcome, error) {
+			callCount++
+			// Every round returns BOTH an ask-user finding and an auto-fix
+			// finding. Round 1 triggers the (single allowed) auto-fix attempt;
+			// round 2 hits the limit with ask-user findings still present.
+			return &StepOutcome{
+				NeedsApproval: true,
+				AutoFixable:   true,
+				Findings: `{"findings":[
+					{"id":"F1","severity":"warning","description":"needs user","action":"ask-user"},
+					{"id":"F2","severity":"info","description":"auto-fixable","action":"auto-fix"}
+				],"summary":"2 issues"}`,
+			}, nil
+		},
+	}
+
+	exec := NewExecutor(database, p, cfg, nil, []Step{step}, nil)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- exec.Execute(context.Background(), run, repo, workDir)
+	}()
+
+	// After round 1 consumes the single auto-fix attempt, round 2 surfaces
+	// the ask-user finding. Because round 1 was an auto-fix, sctx.Fixing is
+	// true and approval status becomes FixReview, not AwaitingApproval.
+	waitForStepStatusOrDone(t, database, run.ID, types.StepReview, types.StepStatusFixReview, done)
+	if err := exec.Respond(types.StepReview, types.ActionAbort, nil); err != nil {
+		t.Fatalf("respond abort: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("executor timed out")
+	}
+
+	output := logs.String()
+	if strings.Contains(output, `"msg":"review_model_fix_loop"`) {
+		t.Errorf("review_model_fix_loop MUST NOT fire when ask-user findings remain at the limit; got:\n%s", output)
+	}
+	if !strings.Contains(output, `"msg":"review_approval_requested"`) {
+		t.Errorf("expected review_approval_requested when ask-user remains at limit; got:\n%s", output)
+	}
+}
+
 func TestExecutor_LogsModelFixLoop(t *testing.T) {
 	var logs bytes.Buffer
 	oldLogger := slog.Default()
