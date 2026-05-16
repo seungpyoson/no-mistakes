@@ -19,6 +19,7 @@ import (
 	"github.com/kunchenguid/no-mistakes/internal/paths"
 	"github.com/kunchenguid/no-mistakes/internal/shellenv"
 	"github.com/kunchenguid/no-mistakes/internal/telemetry"
+	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
 var applyShellEnvToProcess = shellenv.ApplyToProcess
@@ -252,7 +253,7 @@ func recoverOnStartup(d *db.DB, p *paths.Paths) {
 	reapOrphanedServers(p)
 	migrateGateConfigs(context.Background(), p)
 
-	count, err := d.RecoverStaleRuns("daemon crashed during execution")
+	count, err := d.RecoverStaleRuns("daemon crashed during execution", types.FailureToolCrash)
 	if err != nil {
 		slog.Error("failed to recover stale runs", "error", err)
 		return

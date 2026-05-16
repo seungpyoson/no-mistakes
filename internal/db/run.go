@@ -191,10 +191,15 @@ func (d *DB) UpdateRunIntent(id string, intent RunIntent) error {
 }
 
 // RecoverStaleRuns marks any runs stuck in pending/running status as failed
-// and fails any in-progress steps. This is called at daemon startup to clean
-// up after a previous crash. Returns the number of recovered runs.
-func (d *DB) RecoverStaleRuns(errMsg string) (int, error) {
+// and fails any in-progress steps with the given typed failure code. This is
+// called at daemon startup to clean up after a previous crash. Returns the
+// number of recovered runs.
+func (d *DB) RecoverStaleRuns(errMsg string, code types.FailureCode) (int, error) {
 	ts := now()
+	var codeValue any
+	if code != "" {
+		codeValue = string(code)
+	}
 
 	tx, err := d.sql.Begin()
 	if err != nil {
@@ -204,8 +209,8 @@ func (d *DB) RecoverStaleRuns(errMsg string) (int, error) {
 
 	// Fail stale steps first (running, awaiting_approval, fixing, fix_review).
 	_, err = tx.Exec(
-		`UPDATE step_results SET status = ?, error = ?, completed_at = ? WHERE status IN (?, ?, ?, ?)`,
-		types.StepStatusFailed, errMsg, ts,
+		`UPDATE step_results SET status = ?, error = ?, error_code = ?, completed_at = ? WHERE status IN (?, ?, ?, ?)`,
+		types.StepStatusFailed, errMsg, codeValue, ts,
 		types.StepStatusRunning, types.StepStatusAwaitingApproval, types.StepStatusFixing, types.StepStatusFixReview,
 	)
 	if err != nil {
@@ -214,8 +219,8 @@ func (d *DB) RecoverStaleRuns(errMsg string) (int, error) {
 
 	// Fail stale runs.
 	result, err := tx.Exec(
-		`UPDATE runs SET status = ?, error = ?, updated_at = ? WHERE status IN (?, ?)`,
-		types.RunFailed, errMsg, ts,
+		`UPDATE runs SET status = ?, error = ?, error_code = ?, updated_at = ? WHERE status IN (?, ?)`,
+		types.RunFailed, errMsg, codeValue, ts,
 		types.RunPending, types.RunRunning,
 	)
 	if err != nil {

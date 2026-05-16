@@ -227,7 +227,7 @@ func TestRecoverStaleRunsMarksRunsFailed(t *testing.T) {
 	completedRun, _ := d.InsertRun(repo.ID, "feat-c", "eee", "fff")
 	d.UpdateRunStatus(completedRun.ID, types.RunCompleted)
 
-	count, err := d.RecoverStaleRuns("daemon crashed")
+	count, err := d.RecoverStaleRuns("daemon crashed", types.FailureToolCrash)
 	if err != nil {
 		t.Fatalf("recover stale runs: %v", err)
 	}
@@ -272,7 +272,7 @@ func TestRecoverStaleRunsMarksStepsFailed(t *testing.T) {
 	d.CompleteStep(completedStep.ID, 0, 100, "/tmp/log")
 	pendingStep, _ := d.InsertStepResult(run.ID, types.StepPR)
 
-	_, err := d.RecoverStaleRuns("daemon crashed")
+	_, err := d.RecoverStaleRuns("daemon crashed", types.FailureToolCrash)
 	if err != nil {
 		t.Fatalf("recover stale runs: %v", err)
 	}
@@ -296,6 +296,39 @@ func TestRecoverStaleRunsMarksStepsFailed(t *testing.T) {
 	}
 }
 
+func TestRecoverStaleRunsPersistsErrorCode(t *testing.T) {
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/project-rc", "git@github.com:user/project-rc.git", "main")
+
+	runningRun, _ := d.InsertRun(repo.ID, "feat", "abc", "def")
+	d.UpdateRunStatus(runningRun.ID, types.RunRunning)
+
+	runningStep, _ := d.InsertStepResult(runningRun.ID, types.StepReview)
+	d.StartStep(runningStep.ID)
+
+	if _, err := d.RecoverStaleRuns("daemon crashed during execution", types.FailureToolCrash); err != nil {
+		t.Fatalf("recover stale runs: %v", err)
+	}
+
+	got, _ := d.GetRun(runningRun.ID)
+	if got.ErrorCode == nil || *got.ErrorCode != string(types.FailureToolCrash) {
+		var ec string
+		if got.ErrorCode != nil {
+			ec = *got.ErrorCode
+		}
+		t.Errorf("run error_code = %q, want %q", ec, types.FailureToolCrash)
+	}
+
+	gotStep, _ := d.GetStepResult(runningStep.ID)
+	if gotStep.ErrorCode == nil || *gotStep.ErrorCode != string(types.FailureToolCrash) {
+		var ec string
+		if gotStep.ErrorCode != nil {
+			ec = *gotStep.ErrorCode
+		}
+		t.Errorf("step error_code = %q, want %q", ec, types.FailureToolCrash)
+	}
+}
+
 func TestRecoverStaleRunsNoStaleRuns(t *testing.T) {
 	d := openTestDB(t)
 	repo, _ := d.InsertRepo("/home/user/project3", "git@github.com:user/project3.git", "main")
@@ -304,7 +337,7 @@ func TestRecoverStaleRunsNoStaleRuns(t *testing.T) {
 	run, _ := d.InsertRun(repo.ID, "feat", "abc", "def")
 	d.UpdateRunStatus(run.ID, types.RunCompleted)
 
-	count, err := d.RecoverStaleRuns("daemon crashed")
+	count, err := d.RecoverStaleRuns("daemon crashed", types.FailureToolCrash)
 	if err != nil {
 		t.Fatalf("recover: %v", err)
 	}
