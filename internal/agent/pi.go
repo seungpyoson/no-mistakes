@@ -32,13 +32,7 @@ func (a *piAgent) Preflight(ctx context.Context) error {
 	if readinessErr := DetectReadinessFailure(output); readinessErr != nil {
 		return readinessErr
 	}
-	if err != nil {
-		if output != "" {
-			return fmt.Errorf("pi preflight: %w: %s", err, output)
-		}
-		return fmt.Errorf("pi preflight: %w", err)
-	}
-	return nil
+	return WrapPreflightExit("pi", checkCtx, err, output)
 }
 
 func (a *piAgent) Run(ctx context.Context, opts RunOpts) (*Result, error) {

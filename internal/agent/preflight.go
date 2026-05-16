@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -18,6 +19,27 @@ func Preflight(ctx context.Context, ag Agent) error {
 		return checker.Preflight(ctx)
 	}
 	return nil
+}
+
+// WrapPreflightExit builds a standard preflight error from a subprocess exit.
+// When ctx has expired with DeadlineExceeded, the returned error text includes
+// "deadline exceeded" so downstream classifiers (preflightFailureCode,
+// failureCodeForText) map it to FailureModelTimeout instead of
+// FailureToolCrash; without this, exec.CommandContext surfaces only
+// "signal: killed" when the deadline fires. Returns nil when err is nil.
+func WrapPreflightExit(name string, ctx context.Context, err error, output string) error {
+	if err == nil {
+		return nil
+	}
+	output = strings.TrimSpace(output)
+	marker := ""
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		marker = "deadline exceeded: "
+	}
+	if output != "" {
+		return fmt.Errorf("%s preflight: %s%w: %s", name, marker, err, output)
+	}
+	return fmt.Errorf("%s preflight: %s%w", name, marker, err)
 }
 
 // DetectReadinessFailure extracts provider/config readiness failures from

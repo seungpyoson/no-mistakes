@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPiAgent_BuildArgs(t *testing.T) {
@@ -61,6 +62,41 @@ func TestPiAgent_BuildPromptOmitsContractWhenSchemaEmpty(t *testing.T) {
 	prompt := buildPiPrompt("do a thing", nil)
 	if prompt != "do a thing" {
 		t.Errorf("expected raw prompt when no schema, got: %q", prompt)
+	}
+}
+
+// Preflight that times out must surface a deadline marker in its error text so
+// that the downstream classifier (preflightFailureCode) maps it to
+// FailureModelTimeout rather than FailureToolCrash. Without an explicit marker,
+// exec.CommandContext returns "signal: killed" when it kills the child, which
+// matches none of the timeout patterns.
+func TestPiAgent_PreflightDeadlineSurfacesTimeoutMarker(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("posix-only: fake pi uses /bin/sh sleep")
+	}
+	dir := t.TempDir()
+	bin := writeFakePi(t, dir, `#!/bin/sh
+sleep 30
+`, "")
+
+	pa := &piAgent{bin: bin}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err := pa.Preflight(ctx)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("expected preflight error from deadline")
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("preflight took %s — parent ctx deadline not honored", elapsed)
+	}
+	msg := strings.ToLower(err.Error())
+	if !strings.Contains(msg, "deadline exceeded") &&
+		!strings.Contains(msg, "timed out") &&
+		!strings.Contains(msg, "timeout") {
+		t.Fatalf("expected timeout marker in preflight err so failure_code maps to model_timeout, got: %v", err)
 	}
 }
 
