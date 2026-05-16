@@ -93,9 +93,9 @@ func TestFailureCodeForRunErrorClassifiesWrappedStepFailures(t *testing.T) {
 			want: types.FailureUserAbort,
 		},
 		{
-			name: "superseded is not tool crash",
+			name: "superseded is user abort",
 			err:  fmt.Errorf(types.RunCancelReasonSuperseded),
-			want: "",
+			want: types.FailureUserAbort,
 		},
 	}
 

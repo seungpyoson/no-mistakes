@@ -8,10 +8,12 @@ import (
 )
 
 func failureCodeForStepError(step types.StepName, err error, ctxs ...context.Context) types.FailureCode {
-	if contextWasSuperseded(ctxs...) || textIsSuperseded(errString(err)) {
-		return ""
-	}
-	if contextWasUserAbort(ctxs...) || textIsUserAbort(errString(err)) {
+	// Treat supersede the same as an explicit user abort: both are user-driven
+	// cancellations and should not be misclassified as tool crashes. Operators
+	// can still distinguish by run.status (cancelled) and the error text
+	// ('cancelled: superseded by new push' vs 'cancelled: aborted by user').
+	if contextWasUserAbort(ctxs...) || textIsUserAbort(errString(err)) ||
+		contextWasSuperseded(ctxs...) || textIsSuperseded(errString(err)) {
 		return types.FailureUserAbort
 	}
 	if step == types.StepTest {
@@ -24,10 +26,12 @@ func failureCodeForStepError(step types.StepName, err error, ctxs ...context.Con
 }
 
 func failureCodeForRunError(err error, ctxs ...context.Context) types.FailureCode {
-	if contextWasSuperseded(ctxs...) || textIsSuperseded(errString(err)) {
-		return ""
-	}
-	if contextWasUserAbort(ctxs...) || textIsUserAbort(errString(err)) {
+	// Treat supersede the same as an explicit user abort: both are user-driven
+	// cancellations and should not be misclassified as tool crashes. Operators
+	// can still distinguish by run.status (cancelled) and the error text
+	// ('cancelled: superseded by new push' vs 'cancelled: aborted by user').
+	if contextWasUserAbort(ctxs...) || textIsUserAbort(errString(err)) ||
+		contextWasSuperseded(ctxs...) || textIsSuperseded(errString(err)) {
 		return types.FailureUserAbort
 	}
 	msg := strings.ToLower(errString(err))

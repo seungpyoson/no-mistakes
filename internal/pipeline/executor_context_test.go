@@ -101,8 +101,12 @@ func TestExecutor_ContextCancelCause(t *testing.T) {
 		}
 		t.Errorf("expected run error to contain 'superseded by new push', got %q", got)
 	}
-	if updated.ErrorCode != nil {
-		t.Errorf("expected superseded run error_code to be nil, got %q", *updated.ErrorCode)
+	if updated.ErrorCode == nil || *updated.ErrorCode != string(types.FailureUserAbort) {
+		var got string
+		if updated.ErrorCode != nil {
+			got = *updated.ErrorCode
+		}
+		t.Errorf("expected superseded run error_code = %q, got %q", types.FailureUserAbort, got)
 	}
 }
 
@@ -158,7 +162,11 @@ func TestExecutor_ContextCancelCauseBetweenSteps(t *testing.T) {
 		}
 		t.Errorf("expected run error to contain 'superseded by new push', got %q", got)
 	}
-	if updated.ErrorCode != nil {
-		t.Errorf("expected superseded run error_code to be nil, got %q", *updated.ErrorCode)
+	if updated.ErrorCode == nil || *updated.ErrorCode != string(types.FailureUserAbort) {
+		var got string
+		if updated.ErrorCode != nil {
+			got = *updated.ErrorCode
+		}
+		t.Errorf("expected superseded run error_code = %q, got %q", types.FailureUserAbort, got)
 	}
 }
