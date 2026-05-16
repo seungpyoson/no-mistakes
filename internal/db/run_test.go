@@ -322,6 +322,34 @@ func TestUpdateRunErrorStatusCode_LogsWarnOnEmptyCode(t *testing.T) {
 	}
 }
 
+// Mirrors the empty-code tripwires on UpdateRunErrorStatusCode and
+// FailStepWithCode for the third DB write path that touches error_code.
+// RecoverStaleRuns writes via tx.Exec directly so it bypasses the per-row
+// tripwires; this test pins a single function-entry slog.Warn instead.
+func TestRecoverStaleRunsLogsWarnOnEmptyCode(t *testing.T) {
+	var logs bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(oldLogger)
+
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/project-rc-warn", "git@github.com:user/project-rc-warn.git", "main")
+	run, _ := d.InsertRun(repo.ID, "feat", "abc", "def")
+	d.UpdateRunStatus(run.ID, types.RunRunning)
+
+	if _, err := d.RecoverStaleRuns("synthetic empty-code recovery", ""); err != nil {
+		t.Fatalf("recover stale runs: %v", err)
+	}
+
+	out := logs.String()
+	if !strings.Contains(out, `"msg":"recover_stale_runs_without_error_code"`) {
+		t.Errorf("expected slog warn 'recover_stale_runs_without_error_code' on empty code, got:\n%s", out)
+	}
+	if !strings.Contains(out, "synthetic empty-code recovery") {
+		t.Errorf("expected warn to include err_msg, got:\n%s", out)
+	}
+}
+
 func TestRecoverStaleRunsPersistsErrorCode(t *testing.T) {
 	d := openTestDB(t)
 	repo, _ := d.InsertRepo("/home/user/project-rc", "git@github.com:user/project-rc.git", "main")

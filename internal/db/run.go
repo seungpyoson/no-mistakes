@@ -211,6 +211,10 @@ func (d *DB) RecoverStaleRuns(errMsg string, code types.FailureCode) (int, error
 	var codeValue any
 	if code != "" {
 		codeValue = string(code)
+	} else {
+		slog.Warn("recover_stale_runs_without_error_code",
+			"err_msg", errMsg,
+		)
 	}
 
 	tx, err := d.sql.Begin()
