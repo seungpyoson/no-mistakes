@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
@@ -158,10 +159,21 @@ func (d *DB) UpdateRunErrorStatus(id, errMsg string, status types.RunStatus) err
 
 // UpdateRunErrorStatusCode sets the error message, terminal status, and typed
 // failure code on a run.
+//
+// If code is empty, a slog.Warn ('run_failed_without_error_code') is emitted
+// as a tripwire. Every terminal failure path should pass a typed
+// types.FailureCode; an empty code on this path indicates either a stale
+// legacy caller or an unexpected classification gap.
 func (d *DB) UpdateRunErrorStatusCode(id, errMsg string, status types.RunStatus, code types.FailureCode) error {
 	var codeValue any
 	if code != "" {
 		codeValue = string(code)
+	} else {
+		slog.Warn("run_failed_without_error_code",
+			"run_id", id,
+			"status", status,
+			"err_msg", errMsg,
+		)
 	}
 	_, err := d.sql.Exec(`UPDATE runs SET error = ?, error_code = ?, status = ?, updated_at = ? WHERE id = ?`, errMsg, codeValue, status, now(), id)
 	if err != nil {

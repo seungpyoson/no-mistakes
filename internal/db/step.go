@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
@@ -128,10 +129,20 @@ func (d *DB) FailStep(id string, errMsg string, durationMS int64) error {
 }
 
 // FailStepWithCode marks a step as failed with a typed failure code.
+//
+// If code is empty, a slog.Warn ('step_failed_without_error_code') is emitted
+// as a tripwire. Every step failure path should pass a typed
+// types.FailureCode; an empty code here indicates either a stale legacy
+// caller (FailStep wrapper) or an unexpected classification gap.
 func (d *DB) FailStepWithCode(id string, errMsg string, durationMS int64, code types.FailureCode) error {
 	var codeValue any
 	if code != "" {
 		codeValue = string(code)
+	} else {
+		slog.Warn("step_failed_without_error_code",
+			"step_id", id,
+			"err_msg", errMsg,
+		)
 	}
 	_, err := d.sql.Exec(
 		`UPDATE step_results SET status = ?, error = ?, error_code = ?, duration_ms = ?, completed_at = ? WHERE id = ?`,

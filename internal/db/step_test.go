@@ -1,10 +1,37 @@
 package db
 
 import (
+	"bytes"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
+
+func TestFailStepWithCode_LogsWarnOnEmptyCode(t *testing.T) {
+	var logs bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(oldLogger)
+
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/project-warn-step", "git@github.com:user/project-warn-step.git", "main")
+	run, _ := d.InsertRun(repo.ID, "feat", "abc", "def")
+	step, _ := d.InsertStepResult(run.ID, types.StepReview)
+
+	if err := d.FailStepWithCode(step.ID, "synthetic empty-code step path", 100, ""); err != nil {
+		t.Fatalf("fail step: %v", err)
+	}
+
+	out := logs.String()
+	if !strings.Contains(out, `"msg":"step_failed_without_error_code"`) {
+		t.Errorf("expected slog warn 'step_failed_without_error_code' on empty code, got:\n%s", out)
+	}
+	if !strings.Contains(out, step.ID) {
+		t.Errorf("expected warn to include step_id %q, got:\n%s", step.ID, out)
+	}
+}
 
 func TestGetStepResult_LegacyBabysitStepName(t *testing.T) {
 	d := openTestDB(t)

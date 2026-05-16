@@ -1,6 +1,9 @@
 package db
 
 import (
+	"bytes"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/kunchenguid/no-mistakes/internal/types"
@@ -293,6 +296,29 @@ func TestRecoverStaleRunsMarksStepsFailed(t *testing.T) {
 		if got.Status != tc.want {
 			t.Errorf("step %s: status = %q, want %q", tc.name, got.Status, tc.want)
 		}
+	}
+}
+
+func TestUpdateRunErrorStatusCode_LogsWarnOnEmptyCode(t *testing.T) {
+	var logs bytes.Buffer
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(oldLogger)
+
+	d := openTestDB(t)
+	repo, _ := d.InsertRepo("/home/user/project-warn", "git@github.com:user/project-warn.git", "main")
+	run, _ := d.InsertRun(repo.ID, "feat", "abc", "def")
+
+	if err := d.UpdateRunErrorStatusCode(run.ID, "synthetic empty-code path", types.RunFailed, ""); err != nil {
+		t.Fatalf("update run: %v", err)
+	}
+
+	out := logs.String()
+	if !strings.Contains(out, `"msg":"run_failed_without_error_code"`) {
+		t.Errorf("expected slog warn 'run_failed_without_error_code' on empty code, got:\n%s", out)
+	}
+	if !strings.Contains(out, run.ID) {
+		t.Errorf("expected warn to include run_id %q, got:\n%s", run.ID, out)
 	}
 }
 
