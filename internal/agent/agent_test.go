@@ -83,6 +83,41 @@ func TestDetectReadinessFailure_ClassifiesProviderConfigWarnings(t *testing.T) {
 	}
 }
 
+// Locks the four provider-readiness patterns through both the agent-side
+// detector (DetectReadinessFailure) and the pipeline-side predicate
+// (IsProviderReadinessFailure) so the two cannot drift. If a new pattern is
+// added, this test should expand alongside the providerReadinessPatterns
+// table.
+func TestProviderReadinessPatterns_AgentAndPipelineAgree(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  string
+		want bool
+	}{
+		{"env_key not set", "env_key POOLSIDE_API_KEY is configured but the environment variable is not set", true},
+		{"no models match pattern", "[sync-llm-config] No models match pattern openrouter/~foo", true},
+		{"api key missing", "ERROR: api key is missing", true},
+		{"authentication failed", "authentication failed: invalid bearer token", true},
+		{"unrelated tool crash", "agent crashed: segfault at 0xdeadbeef", false},
+		{"empty", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotBool := IsProviderReadinessFailure(tc.msg)
+			gotErr := DetectReadinessFailure(tc.msg)
+			if gotBool != tc.want {
+				t.Errorf("IsProviderReadinessFailure(%q) = %v, want %v", tc.msg, gotBool, tc.want)
+			}
+			if tc.want && gotErr == nil {
+				t.Errorf("DetectReadinessFailure(%q) = nil, want non-nil", tc.msg)
+			}
+			if !tc.want && gotErr != nil {
+				t.Errorf("DetectReadinessFailure(%q) = %v, want nil", tc.msg, gotErr)
+			}
+		})
+	}
+}
+
 func TestACPAgentBuildArgsUsesExecMode(t *testing.T) {
 	a := &acpxAgent{target: "gemini"}
 	args := a.buildArgs(RunOpts{Prompt: "do work"})

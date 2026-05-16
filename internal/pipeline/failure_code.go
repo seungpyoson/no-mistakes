@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/kunchenguid/no-mistakes/internal/agent"
 	"github.com/kunchenguid/no-mistakes/internal/types"
 )
 
@@ -50,7 +51,7 @@ func failureCodeForText(msg string) types.FailureCode {
 	switch {
 	case strings.Contains(msg, "model_fix_loop"):
 		return types.FailureModelFixLoop
-	case containsProviderReadinessError(msg):
+	case agent.IsProviderReadinessFailure(msg):
 		return types.FailureProviderUnavailable
 	case strings.Contains(msg, "deadline exceeded"),
 		strings.Contains(msg, "timed out"),
@@ -59,14 +60,6 @@ func failureCodeForText(msg string) types.FailureCode {
 	default:
 		return types.FailureToolCrash
 	}
-}
-
-func containsProviderReadinessError(msg string) bool {
-	msg = strings.ToLower(msg)
-	return strings.Contains(msg, "env_key") && strings.Contains(msg, "not set") ||
-		strings.Contains(msg, "no models match pattern") ||
-		strings.Contains(msg, "api key") && strings.Contains(msg, "missing") ||
-		strings.Contains(msg, "authentication") && strings.Contains(msg, "failed")
 }
 
 func contextWasUserAbort(ctxs ...context.Context) bool {
